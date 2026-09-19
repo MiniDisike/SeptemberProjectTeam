@@ -1,0 +1,17 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+# 常驻插件：task-warden 的「监督员」Host 半边（蓝屏/重启后自动加载）
+# 为什么不用动态包：动态 Cordis 包天生不落盘（dsh-cordis-host-runner\README.md:12）
+# 去掉下面 insert 那两行就能停掉它；改动前的备份在同目录 cordis.patch.yml.bak-before-warden
+# ⚠ 2026-09-17 实测结论（别重复踩）：**`patchReload: live` 不会重载模块代码。**
+#   实验：改了这个文件之后，等 8 秒看 `warden-watch.js` 的探针 `plugin-live` ——
+#   服务器进程（pid 11724）**没有**重新出现 ⇒ 模块被 Node 的 require 缓存住了。
+#   ⇒ **改了 `warden-watch.js` / `gate.mjs` 的代码，必须重启 DSH 才生效**；
+#     改这个 patch 文件本身（增删 insert 行）是 live 的，但那只影响"挂哪些插件"，不影响"插件的代码是哪个版本"。
+- insert:
+    - id: warden-watch
+      name: <WORKSPACE>/task-warden/plugin/warden-watch.js
+    # ⚠ 公开版删掉了第二行 insert（原来指向另一个私有插件的路径）——
+    #   那个插件**不在本包里**，照抄会把公开用户的 DSH 装坏（指向不存在的路径）。
+    #   那是作者自己项目的东西，与本工具无关。

@@ -1,0 +1,17 @@
+# task-warden：**账本不许进版本库**
+#
+# 为什么必须有这个文件：INSTALL 让用户把 .warden 建在**工程根**（有 .git 的那一层），
+#   而 .warden 里会写：绝对路径（config.json）、用户逐字原话（VOICE.jsonl / SPEC.md）、
+#   事故与发现台账。**一次 `git add .` 就会把这些推上去。**
+#   （这条是「脑子A」的泄漏审计提出来的。）
+.warden/
+*.warden/
+**/.warden/
+
+# 实验沙箱（跑自检时会生成）
+_lab/
+_brainB_tmp/
+
+# 常见噪声
+node_modules/
+*.log

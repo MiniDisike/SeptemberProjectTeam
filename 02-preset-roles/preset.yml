@@ -1,0 +1,2 @@
+﻿name: 九月项目团
+description: 在标准编码 Agent 之上装八个角色（8 席）：监督员/审查/记录/支线守门员/提问闸门/资料员/方向员 共 7 席有票，另有 AI测试用户 1 席无票（站用户位置做预演，意见是预测不是授权）。带两个固定人格的派单口（subagent_liaison / subagent_direction）。要求长任务把用户原话逐字锁进 .warden、每轮 record、宣布完成前 check；角色说话必须按「名字 · 职称：原话」直接显示（warden role say），不许主代理转述（warden role scan 自查）。

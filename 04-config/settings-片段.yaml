@@ -1,0 +1,5 @@
+# 从 settings.yaml 里摘出来的相关片段（换机时把 agent-presets.default 设成 roles）
+# 完整文件太大且含其它无关配置，这里只摘这一段 —— 别整份覆盖。
+
+agent-presets:
+  default: roles

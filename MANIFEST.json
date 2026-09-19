@@ -1,0 +1,232 @@
+{
+  "name": "SeptemberProjectTeam / task-warden (public edition)",
+  "date": "2026-09-18",
+  "note": "Public edition. Machine-specific paths and the author's verbatim quotes are redacted; all paths are derived at runtime. Verify with: node -e \"...\" (see INSTALL §8).",
+  "files": [
+    {
+      "rel": ".gitignore",
+      "size": 541,
+      "sha256": "cdb7065b2f286af00a82fb83bbdb44c8d84ea8eee2ce62e0120874d4511b818b"
+    },
+    {
+      "rel": "01-skill/bill-compare.mjs",
+      "size": 7849,
+      "sha256": "06ad081f903d7bf913ebbd21fa78784be7dc0ef13e3131c9be41fdee46f6e5dc"
+    },
+    {
+      "rel": "01-skill/bill.mjs",
+      "size": 14535,
+      "sha256": "210e343b483d66d993d42278b3b4204a4745fa055ed9319c98e5c4454cf5842a"
+    },
+    {
+      "rel": "01-skill/context-audit.mjs",
+      "size": 4154,
+      "sha256": "a4e0b344cb6151f085f8ad7dcf94899b5b68e6ee3611ab5e05dd4e7c0ca8dbd6"
+    },
+    {
+      "rel": "01-skill/experiments/lab/common.mjs",
+      "size": 16911,
+      "sha256": "46479558a8d3b1eb011faa00cb544b92b334aff20b15265a2b96c50ec5df7af4"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L1_gear_vs_cube.mjs",
+      "size": 6099,
+      "sha256": "9da508eac816e9d7b42b2f4c257eff38f4054dee1f1a79210b890c2b642240dc"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L10_stale_voice.mjs",
+      "size": 7725,
+      "sha256": "d10977968b800ae674d0d277dbb9a616818ba5a2ea4a05a8961b1c5c8b1f4132"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L11_false_pass.mjs",
+      "size": 4412,
+      "sha256": "83260d6ead7c96e5f2066f48b22de92b46236c1e55a3ed8a7d422edbc6d6fdc9"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L12_conditional_consent.mjs",
+      "size": 9299,
+      "sha256": "3368fd6b913e36b1b17c16b288bf8248deef8e81b012b153e2167937d1fb84c9"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L13_coverage_selfclaim.mjs",
+      "size": 5059,
+      "sha256": "f0d108b93c4349019651db7a0e0b8c1363f743a623804919b59dec75d04e17e2"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L14_voice_claims.mjs",
+      "size": 10481,
+      "sha256": "b3d47741dc0fb2d19eb0944bcb544511e5ce59526a549620c3f18c1c741812ea"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L15_roster_seat.mjs",
+      "size": 11154,
+      "sha256": "724f4e6c8ba237a33f83988888278f8bc730a0ce7d7ed0ced1f7617373ee970c"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L16_no_self_address.mjs",
+      "size": 7625,
+      "sha256": "9e1ddbfb719f58d555b5d6e569b7a5b2d4dca1775c9bd78068602ea713a5e50f"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L17_ancestor_init.mjs",
+      "size": 7150,
+      "sha256": "3ca3b61978958655d018021e60f0fc7b2205a6c1a073d6b7cb3114b4c50042e8"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L18_fake_evidence.mjs",
+      "size": 5957,
+      "sha256": "2165e05f47deeef8dfafee4aee804116a50c55a4f4175703aab4cf925c2355bc"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L19_roles_health.mjs",
+      "size": 7353,
+      "sha256": "a5239ffd918208bcb9f8607bb4c4f7a0d6e37de1a86c36a95ccca8511877e221"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L2_half_done.mjs",
+      "size": 4782,
+      "sha256": "48d0a956a1dd30006a15d3855172e72581975cd379c33941fa0a68c215fb872e"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L20_role_speech.mjs",
+      "size": 6869,
+      "sha256": "2abe8fbf9d17fa7994d11afdbc8c98821b81a6a47af5b345c2db152324ddf2de"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L3_isolation.mjs",
+      "size": 5378,
+      "sha256": "7e4758e2363bb08b914c1ebf9b73980d4e0f43317e65105cc12424743c598c1d"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L4_frozen_baseline.mjs",
+      "size": 5259,
+      "sha256": "ba2dc5d910adc6e39bf2aca5ce98bc6d8c2e2f66ba92c534038979f20ae46241"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L5_attribution_laundering.mjs",
+      "size": 8208,
+      "sha256": "adb76fef96b3cf53bc0534b096e3efffd03bb0e4c8d84bfb63f9dfbd7b43cac3"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L6_false_accusation.mjs",
+      "size": 6447,
+      "sha256": "0119f456ae1651f302dc8ff5639972969f2701e2985e9611ae621caad304d929"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L7_compression.mjs",
+      "size": 7967,
+      "sha256": "b1f8cc20b03f0ce979f9fa7d2f02d79d6f34776f3c636001b4f3107b5094249d"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L8_incidents.mjs",
+      "size": 9501,
+      "sha256": "7f5764d89269386a0180d99cc46c68a15746f9ffca7deb39184f4be67576151c"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L9_negation_flip.mjs",
+      "size": 10496,
+      "sha256": "eb6ffa818f42c7d3162467e32c207af9c193a2801f928961c4beda5b11c6a2ef"
+    },
+    {
+      "rel": "01-skill/experiments/lab/README.md",
+      "size": 8070,
+      "sha256": "d093f6401466747bf4cbc089ccf2b2f53333a98e046df7a87d9632fa0b6e3d04"
+    },
+    {
+      "rel": "01-skill/experiments/lab/run-all.mjs",
+      "size": 4992,
+      "sha256": "371e14a1f60c3df96242dc8f85f7925af5ae0858eec461606feb848fe6c79ac6"
+    },
+    {
+      "rel": "01-skill/README-安装说明.md",
+      "size": 5069,
+      "sha256": "274f74a5427230f2d2290c048cc5d36d671ff60d2c5db4a739b3025c161c74ca"
+    },
+    {
+      "rel": "01-skill/selftest.mjs",
+      "size": 93219,
+      "sha256": "6b901c0ab61e556ed8fa6170ccf006a1803ee62c81b4f65c379f5cda0fcaf506"
+    },
+    {
+      "rel": "01-skill/SKILL.md",
+      "size": 28487,
+      "sha256": "cebf485937087041bd36d54ef045b9c39f2b83b7d605b547e53095b6cc04198c"
+    },
+    {
+      "rel": "01-skill/warden.mjs",
+      "size": 359649,
+      "sha256": "70251592daa3557a7dd7e8f35f888cccf6f88e3cb0037f8ecd1c8790d62c0b19"
+    },
+    {
+      "rel": "02-preset-roles/agent.cordis.yml",
+      "size": 19879,
+      "sha256": "5218147cdb8b903c36fb979c0851f715bf00dc5c9f5b771080b0c4b57a35809d"
+    },
+    {
+      "rel": "02-preset-roles/preset.yml",
+      "size": 596,
+      "sha256": "766c1c2373c3847ab5eab23bd3964bb9e79f1ab43aace40f4f7edc6b0ff36f52"
+    },
+    {
+      "rel": "03-host-plugin/gate.mjs",
+      "size": 21976,
+      "sha256": "8d6872ee2c04be8bc92c0d8b47c7c6be134abd29b172379e88be7607ab4405e9"
+    },
+    {
+      "rel": "03-host-plugin/gate.selftest.mjs",
+      "size": 17739,
+      "sha256": "d0d4581b1be30ceb796d4e43a68a2860c8e93302556d49140e1664bfe3d9ccb3"
+    },
+    {
+      "rel": "03-host-plugin/plugin-io.js",
+      "size": 32547,
+      "sha256": "ca2680fd290b0b6eed0760c59d16f6eabbc1da6c489a9d31514abea7d7d5f8cc"
+    },
+    {
+      "rel": "03-host-plugin/preset-default-guard.mjs",
+      "size": 13352,
+      "sha256": "3b62600991eb877412d119a94c58aeeb408d55598c6342e933f24023a3363a28"
+    },
+    {
+      "rel": "03-host-plugin/RESTORE.md",
+      "size": 2366,
+      "sha256": "588db5a89abdd42b43fb5ee642107c340953352859af69b33600824fb87f73e1"
+    },
+    {
+      "rel": "03-host-plugin/warden-watch.js",
+      "size": 17722,
+      "sha256": "bb7055fd4d41bd186475cdb4a211b89c8143d45da9128140b3d72af01930f4a3"
+    },
+    {
+      "rel": "04-config/cordis.patch.yml",
+      "size": 1448,
+      "sha256": "04d8063e1821d7f2f904af8e5ca44eb65f6ca33b097060f36bf31bc81e3bc36c"
+    },
+    {
+      "rel": "04-config/settings-片段.yaml",
+      "size": 229,
+      "sha256": "6f9cd5d269b2276cd9a95c1fc9e430e342e85676c82031cb5c57e23bb6628823"
+    },
+    {
+      "rel": "INSTALL.md",
+      "size": 10990,
+      "sha256": "851af31c60deb2dc043fd9ae0f938a861b9247a5409a5b1fe7fe14a1793a22fa"
+    },
+    {
+      "rel": "LICENSE",
+      "size": 1090,
+      "sha256": "3e2dbd3b44a85f522e624ed1aaf8f80e95851d7a0dbec83a5fe12579cee22153"
+    },
+    {
+      "rel": "README.md",
+      "size": 9468,
+      "sha256": "210a0c938d03dcccc3116d0c0f903d148e1138fad144e2c5588d39dcfdede614"
+    },
+    {
+      "rel": "THIRD-PARTY-NOTICES.md",
+      "size": 1197,
+      "sha256": "659efc67a1d258fad361f8321cb1073f46f0bb28b17c4907c86357e7a1b118a6"
+    }
+  ]
+}
