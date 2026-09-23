@@ -367,6 +367,46 @@ const P1 = mkProject('p1', {
   check('⑰', 'present 交付：逐条交代过 ⇒ allow（正控，防误伤）',
     !!v17 && v17.kind === 'allow',
     v17 ? `kind=${v17.kind}` : `没返回 ${loadErr}`)
+
+  // ⑱~⑳ **没有账本 ⇒ 不许交付**（2026-09-23；用户的产品级要求：
+  //   「我不希望整个插件的运行是靠我自己的聊天记录来驱动的…要一个真正能够安装就能够正常使用的」）
+  const p18 = mkProject('p18', { rounds: '' })   // 有 .warden 但**没有 SPEC.md**
+  let v18 = null
+  try {
+    v18 = preToolDecision({ toolName: 'present', toolArgs: { files: [{ path: path.join(p18, 'docs', 'x.md') }] }, cwd: p18 })
+  } catch (e) { loadErr = String((e && e.message) || e) }
+  check('⑱', '交付时工程**没有 SPEC.md** ⇒ deny（并给出 init + 锁原话的指令）',
+    !!v18 && v18.kind === 'deny' && String(v18.reason).includes('还没有账本') && String(v18.reason).includes('warden.mjs init'),
+    v18 ? `kind=${v18.kind}` : `没返回 ${loadErr}`)
+
+  const p19 = mkProject('p19', { rounds: '' })
+  fs.writeFileSync(path.join(p19, '.warden', 'SPEC.md'), '# 需求账本\n\n（骨架建好了，但一条需求都还没锁）\n', 'utf8')
+  let v19 = null
+  try {
+    v19 = preToolDecision({ toolName: 'present', toolArgs: { files: [{ path: path.join(p19, 'docs', 'x.md') }] }, cwd: p19 })
+  } catch (e) { loadErr = String((e && e.message) || e) }
+  check('⑲', 'SPEC 在但**一条 `## R#` 都没有**（空骨架）⇒ 仍 deny（不许"自动建骨架 = 自动放行"）',
+    !!v19 && v19.kind === 'deny',
+    v19 ? `kind=${v19.kind}` : `没返回 ${loadErr}`)
+
+  const p20 = mkProject('p20', {
+    rounds: round({ round: 1, requirement: 'R1', status: 'done', at: T_DONE, covered: ['甲', '乙'], avoided: ['不许把绘制锁死在一张平面=画布锚在活刷尖'] }) + '\n',
+  })
+  fs.writeFileSync(path.join(p20, '.warden', 'SPEC.md'), SPEC_P, 'utf8')
+  // ⚠ 2026-09-23 补（「方向员」独立复核抓到的）：⑳ 是"该放行"的正控，
+  //   但它漏写了 RECON.jsonl ⇒ 撞上 judgeLedger 的第二条判据「报了 done 就必须有一次收尾对账」
+  //   ⇒ **该放行的正控被误拒**（实测 23 项 1 红）。这不是自检写错，是闸的真行为：
+  //   任何"有 done 轮、却没有 RECON.jsonl"的工程，present 一律被拒。
+  //   ⇒ 正控必须把两条判据都喂饱，否则它测的不是"该放行"，而是"缺对账会不会被拦"。
+  fs.writeFileSync(path.join(p20, '.warden', 'RECON.jsonl'),
+    JSON.stringify({ at: T_DONE, kind: 'results', session: '', planned: ['R1'], quotes: 1, gaps: 0, lastRound: 1 }) + '\n', 'utf8')
+  let v20 = null
+  try {
+    v20 = preToolDecision({ toolName: 'present', toolArgs: { files: [{ path: path.join(p20, 'docs', 'x.md') }] }, cwd: p20 })
+  } catch (e) { loadErr = String((e && e.message) || e) }
+  check('⑳', '正控 · 有需求、且「不要」都交代过 ⇒ allow（不许把"有账本"变成一律拒交）',
+    !!v20 && v20.kind === 'allow',
+    v20 ? `kind=${v20.kind}` : `没返回 ${loadErr}`)
 }
 
 // ---------------------------------------------------------------- 输出

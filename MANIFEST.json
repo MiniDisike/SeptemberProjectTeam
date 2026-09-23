@@ -205,18 +205,18 @@
     },
     {
       "rel": "03-host-plugin/gate.mjs",
-      "size": 21915,
-      "sha256": "f3219f61263f05aade9fef2ba58c0848e2928c6b65ce19d5b87013b523bb91eb"
+      "size": 24095,
+      "sha256": "da2871b42c92b344d340d0750ca10008bd4ab239dd1d43d5c085a7115dd1120b"
     },
     {
       "rel": "03-host-plugin/gate.selftest.mjs",
-      "size": 17728,
-      "sha256": "8a9a07ce40e9821756687048f8ec5855cc0bde4782d2619595f95f4116474b5d"
+      "size": 20625,
+      "sha256": "0efc081158df071739f95f5417f0d6653924a92120323768b3f222383dd2e380"
     },
     {
       "rel": "03-host-plugin/plugin-io.js",
-      "size": 32067,
-      "sha256": "3dab0670067f3528fea463f00074f23a0cd08ac8b7a104e4ddc7d01ea075b320"
+      "size": 35034,
+      "sha256": "725954d3b5c45b075f53bbf68391ffd768796de2a7250fc177c3f802a2d2b873"
     },
     {
       "rel": "03-host-plugin/preset-default-guard.mjs",
@@ -225,8 +225,8 @@
     },
     {
       "rel": "03-host-plugin/warden-watch.js",
-      "size": 17720,
-      "sha256": "68cb1eb16e772fb20a27957c1b9ce477cc822f0e012ef0a3ff9432208c2a97c5"
+      "size": 30239,
+      "sha256": "6260117de74f39fa094c28ea1287faf854b5ce3e4a84f03b514a88b3bc678fa9"
     },
     {
       "rel": "04-config/cordis.patch.yml",

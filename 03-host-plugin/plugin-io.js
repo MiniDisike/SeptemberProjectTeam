@@ -29,9 +29,23 @@ const path = require('path')
 const os = require('os')
 const { execFileSync } = require('child_process')
 
-// ⚠ 公开版：运行时推导（原来是写死的绝对路径）
-const ROOT = process.env.WARDEN_ROOT || process.cwd()
-const WARDEN = process.env.WARDEN_MJS || require('path').join(require('os').homedir(), '.dsh', 'skills', 'task-warden', 'warden.mjs')
+/**
+ * ⚠⚠ **2026-09-23 修：ROOT 原来是硬编码 `<WORKSPACE>`** —— 那是 R5 事故的真正病根。
+ *
+ * 支线守门员七席投票时的原话：「**R5 必须立即修** —— 它是两条候选的共同前置；
+ *   账本找不到，屏幕和闸都是空的。硬证据：`PLUGIN-LIVE.json` 的 detail 是 `[结构] 缺 .warden/SPEC.md`，
+ *   而真账本在 `<WORKSPACE>\task-warden\.warden\SPEC.md`（**另一个盘**）。」
+ *
+ * 实测（2026-09-23）：这个常量写死 ⇒ **用户在 `<HOME>\DSH-Workspace` 干活，
+ *   插件读写的却是 `<WORKSPACE>` 那本账** —— 屏幕上显示的是**另一个盘、另一个项目**的账。
+ *
+ * 现在三级解析（**保守**：都不给才退回旧值，行为向后兼容）：
+ *   ① `WARDEN_ROOT` 环境变量（调用方显式指定）
+ *   ② `argv[22]`（`warden-watch.js` 传"这个会话自己的工作区"）
+ *   ③ 旧值兜底
+ */
+const ROOT = process.env.WARDEN_ROOT || process.argv[22] || '<WORKSPACE>'
+const WARDEN = '<HOME>\\.dsh\\skills\\task-warden\\warden.mjs'
 const LIVE_NAME = 'PLUGIN-LIVE.json'
 const CALLS_NAME = 'PLUGIN-CALLS.jsonl'
 const MAX_FEED = 80
@@ -39,7 +53,7 @@ const MAX_FEED = 80
 // 按优先级镜像：第 1 个是"本该写的地方"，后面是插件沙箱真正允许的地方。
 const OUT_DIRS = [
   path.join(ROOT, '.warden'),
-  require('path').join(require('os').homedir(), 'DSH-Workspace', 'task-warden'),
+  '<HOME>\\DSH-Workspace\\task-warden',
   os.tmpdir(),
 ]
 
@@ -194,6 +208,38 @@ let checkExit = null
 let stdout = ''
 let stderr = ''
 const tmpOut = path.join(os.tmpdir(), 'task-warden-check-' + String(process.pid) + '.txt')
+
+/**
+ * ★★ **没有账本 ⇒ 先建骨架**（2026-09-23 新增）。
+ *
+ * 依据（七席投票里唯一的全体共识）：
+ *   · **支线守门员**：「**R5 必须立即修** —— 它是两条候选（回合边界 / 看得见）的**共同前置**；
+ *     账本找不到，屏幕和闸都是空的。」硬证据：`PLUGIN-LIVE.json` 的 detail 是
+ *     `[结构] 缺 .warden/SPEC.md`，而真账本在 `<WORKSPACE>\task-warden\.warden\SPEC.md`（**另一个盘**）。
+ *   · **记录**：「当前红是**结构性**的（7 个账本文件全 missing），不是模型一轮能补完的。」
+ *   · 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」+「我要的是一个**真正能够安装就能够正常使用**的」
+ *     + R25 的必须项「新窗口自动建轮次（**不是拒交**）」。
+ *
+ * 实测（2026-09-23，在临时副本上跑）：`warden.mjs init` 在"有 .warden 只有插件文件、没有 .git"的目录里
+ *   **照样能建出骨架**（SPEC.md / ROUNDS.jsonl / params.yml / CLAIMS.jsonl / config.json）。
+ * ⇒ 插件每轮开工前先补这一步，**让"这个窗口有自己的轮次"变成真的**，而不是只报"缺 SPEC.md"。
+ * ⚠ 只建骨架、**不编任何需求**（空 SPEC 仍算"没有需求"，交付闸照样拦）—— 原话必须由 agent 逐字锁进去。
+ */
+let autoInit = null
+try {
+  const specPath = path.join(ROOT, '.warden', 'SPEC.md')
+  if (!fs.existsSync(specPath)) {
+    const tmpInit = path.join(os.tmpdir(), 'task-warden-init-' + String(process.pid) + '.txt')
+    const fd0 = fs.openSync(tmpInit, 'w')
+    try {
+      execFileSync(process.execPath, [WARDEN, 'init'], { cwd: ROOT, timeout: 30000, stdio: ['ignore', fd0, fd0] })
+      autoInit = 'created'
+    } catch (e) {
+      autoInit = 'failed:' + String(e.code || e.message).slice(0, 60)
+    } finally { fs.closeSync(fd0) }
+  }
+} catch (e) { autoInit = 'threw:' + String((e && e.message) || e).slice(0, 60) }
+
 try {
   const fd = fs.openSync(tmpOut, 'w')
   try {
@@ -242,9 +288,8 @@ if (m) {
 let speechCount = 0
 try { speechCount = readJsonl('.warden/ROLE_SPEECH.jsonl').length } catch (e) { speechCount = 0 }
 
-// ── 1b) 角色健康：「角色是不是摆设」的机械仪表（用户 2026-09-16 要的那个"呈现"）
-//   用户核心诉求：要有审查有记录有各种角色的劳动在其中各司其职的呈现，
-//                  不能糊弄人导致最后角色只是个摆设。监督员要保证几个角色正确运行。
+// ── 1b) 角色健康：「角色是不是摆设」的机械仪表（用户 2026-09-16 逐字要的那个"呈现"）
+//   用户原话：「（用户原话已隐去 —— 公开版不留逐字）」「监督员要保证几个角色是正确在运行。」
 //   判据在 warden.mjs 的 `rolesHealth`（【硬】票数/反对率/有无产出、【代理】独有项/同构），
 //   那一行的措辞也**由 warden.mjs 产生**（`roles --health --json` 的 line 字段）——
 //   **不许插件自己再拼一套**（两套措辞 = 两套口径，这正是本 skill 反复防的事）。
@@ -313,9 +358,9 @@ const sayWho = function (role) {
 /**
  * ★ **从多个账本读 feed**（2026-09-17 修，用户实测报的 bug）。
  *
- * 用户反馈：浮层最后一条信息显示的是三个小时前的消息。
+ * 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」
  * 根因：这里原来**只读工作区那一本账**（`ROOT/.warden`），而本轮所有工作都在
- *   `<THIS_REPO>\.warden` 里（票 12:16Z、发现 12:23Z），工作区那本的最新活动
+ *   `<WORKSPACE>\task-warden\.warden` 里（票 12:16Z、发现 12:23Z），工作区那本的最新活动
  *   停在 10:04Z ⇒ 浮层永远显示三小时前的东西。**读错了账本，不是渲染坏了。**
  *
  * 现在：工作区账本 + **它下面每个"有 .git 且有 .warden"的子目录**（= 各子工程），
@@ -426,7 +471,7 @@ const mFind = /\[发现\][^\n]*?有\s*(\d+)\s*条发现/.exec(stdout)
 if (mFind) staleFindings = Number(mFind[1])
 let notice = ''
 /**
- * ★★ **脑子那一行**（2026-09-17 用户反馈：脑子不见了，很久没看到它了）。
+ * ★★ **脑子那一行**（2026-09-17 用户报的：「脑子不见了，我已经很久没看到它了」）。
  *
  * 查清的事实：机制**没被删**。真问题是两件事：
  *   ① 那天我用**子代理**跑脑子、却**没落账** ⇒ 判决从没进过界面；
@@ -462,7 +507,7 @@ if (checkExit === null || helperError.length > 0) {
   /**
    * ⚠ 2026-09-17 补：**脑子那一行不许被 check 失败挡住**。
    *   实测：工作区那本账 check 红着，于是 notice 永远停在"check 未通过 N 条"，
-    *   脑子的"结论不成立"一个字都露不出来 —— 这正是用户反馈的脑子不见了一个机制。
+   *   脑子的"结论不成立"一个字都露不出来 —— 这正是用户说的「脑子不见了」的一个机制。
    *   ⇒ 失败时把它接在后面（仍是一行）。
    */
   if (brainChanged) notice += ' ｜ 脑子：' + String(brainLine).replace(/\s+/g, ' ').slice(0, 60)
@@ -482,7 +527,7 @@ if (checkExit === null || helperError.length > 0) {
   if (fresh) notice += ' ｜ ' + String(lastFeed.role || '') + '：' + brief(lastFeed.text, 28)
   /**
    * ★ 角色健康那一行：**签名变了才顶上来**（同主题只问一次 —— 提问闸门的规矩）。
-    *   为什么值得占掉这一行：用户明确要求不能糊弄人导致最后角色只是个摆设，
+   *   为什么值得占掉这一行：用户明确说过「不能糊弄人导致最后角色只是个摆设」，
    *   而"某角色是装饰"正是他自己要看的、可感知的差异（不是我的自言自语）。
    *   没变的时候**一个字都不加**：结论照样写进快照的 rolesLine/rolesSig，AI 自己能看到。
    */
@@ -490,7 +535,7 @@ if (checkExit === null || helperError.length > 0) {
     notice = '监督员·' + hhmm + ' ｜ ' + rolesLine
   }
   /**
-    * ★ 脑子那一行（2026-09-17 用户反馈脑子不见了）：与角色那一行同一套纪律 ——
+   * ★ 脑子那一行（2026-09-17 用户报的「脑子不见了」）：与角色那一行同一套纪律 ——
    *   **签名变了才顶上来**；没变就不占这一行（结论照旧写进快照）。
    *   优先于角色那一行：脑子的"结论不成立"比"某角色是装饰"更该让人看见。
    */
@@ -532,6 +577,9 @@ const snap = {
   // ⚠ 隔壁窗口指出：checkExit=null 分不开"check 真失败"与"执行体自己坏了"。
   //   所以显式给一个布尔：checkRan=false 时**一句"check 未通过"都不许说**。
   checkRan: checkExit !== null,
+  // ★ 2026-09-23：这一轮有没有**自动建过账本骨架**（R5 前置 / R25「自动建轮次」）。
+  //   放在快照里，探针与回合边界的判据才读得到"这一步真跑过没有"。
+  autoInit: autoInit,
   line: headline,
   detail: bullets.join(' ‖ '),
   claimed: claimed,

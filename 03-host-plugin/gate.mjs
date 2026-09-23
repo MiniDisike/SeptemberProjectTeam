@@ -94,9 +94,41 @@ export function judgeLedger(root, deps) {
   const { fs, path } = io0(deps)
   const wdir = path.join(root, '.warden')
   const specPath = path.join(wdir, 'SPEC.md')
-  if (!fs.existsSync(specPath)) return null
+  /**
+   * ★★ **没有账本 ⇒ 不许交付**（2026-09-23 新增；用户的产品级要求）。
+   *
+   * 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」
+   *
+   * 这条洞就是"一装就失灵"的根：
+   *   下面所有判据都从 `SPEC.md` / `ROUNDS.jsonl` 读 —— **账本不存在时，`return null` = 放行**。
+   *   于是新窗口（工作区里没有 `.warden`）可以**随便交**，用户看到的只有"表面糊弄"。
+   *
+   * 现在：**能判出工程根、而那本账里没有需求 ⇒ 拒交**，并给出**一条命令就能做**的补法。
+   *   ⚠ 只认"**有 `## R#` 需求**"才算账本成立 —— 空骨架不算（否则自动建骨架就等于自动放行）。
+   *   ⚠ 判据坏了仍然 fail-open（见 preToolDecision 的 try/catch）。
+   */
+  const hasSpec = fs.existsSync(specPath)
+  let specText = ''
+  if (hasSpec) { try { specText = fs.readFileSync(specPath, 'utf8') } catch (e) { specText = '' } }
+  const reqCount = (specText.match(/^##\s+R\d+\b/gm) || []).length
+  if (reqCount === 0) {
+    const wardenCmd = 'node <HOME>/.dsh/skills/task-warden/warden.mjs'
+    return {
+      kind: 'deny',
+      reason: '[task-warden 交付闸] 先别交：**这个工程还没有账本**'
+        + (hasSpec ? '（`.warden/SPEC.md` 在，但里面一条 `## R#` 需求都没有）' : '（连 `.warden/SPEC.md` 都没有）')
+        + '。\n'
+        + '  为什么拦：没有需求被锁住，"你要的 vs 我给的"就**无从对账** —— 交付闸、角色仪表、欠账表全都读不到东西，\n'
+        + '    用户看到的就是"表面糊弄完就说做完了"（这正是他报的那次）。\n'
+        + `  两条命令就补上（在 ${root} 里跑）：\n`
+        + `    1) ${wardenCmd} init\n`
+        + '    2) 把用户这次说的**原话逐字**写进 `.warden/SPEC.md` 成 `## R1 · <标题>`（含 `- 原话:` / `- 必须:` / `- 不要:` / `- 子项:`）\n'
+        + `    3) ${wardenCmd} claims add --voice "<会话id>#<seq>" --kind 需求 --ref R1 --why "…"\n`
+        + '  （这不是"多一道手续"：不锁需求，后面每一条判据都是空的 —— 这就是"装上了却一用就失灵"的根。）',
+    }
+  }
   let mustNot = new Map()
-  try { mustNot = parseMustNot(fs.readFileSync(specPath, 'utf8')) } catch (e) { return null }
+  try { mustNot = parseMustNot(specText) } catch (e) { return null }
   const rounds = readJsonlFile(fs, path.join(wdir, 'ROUNDS.jsonl'))
   if (!rounds || !rounds.length) return null
 
