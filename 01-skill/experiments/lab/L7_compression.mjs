@@ -101,7 +101,7 @@ export default async function run() {
     dup && dup[1] === '0', grab(v2.stdout, [/新增/, /累计/], 2).join(' | '));
 
   // ---------- 归属核查在"压缩后"仍然验真
-  writeUtf8(path.join(sb.dir, 'probe.md'), `# 压缩后归属核查\n\n## P1\n- 用户原话：「${QUOTE}」\n`);
+  writeUtf8(path.join(sb.dir, 'probe.md'), `# 压缩后归属核查\n\n## P1\n- 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」\n`);
   const q = runWarden(sb.dir, ['quotes', 'probe.md'], { sessionId: sb.sessionId });
   c.check('⑤ 压缩后 quotes 仍能验真（真原话=verbatim）',
     /逐字对上/.test(q.stdout) && q.code === 0,

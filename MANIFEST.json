@@ -1,17 +1,32 @@
 {
   "name": "SeptemberProjectTeam / task-warden (public edition)",
-  "date": "2026-09-18",
-  "note": "Public edition. Machine-specific paths and the author's verbatim quotes are redacted; all paths are derived at runtime. Verify with: node -e \"...\" (see INSTALL §8).",
+  "date": "2026-09-23",
+  "note": "Public edition. Machine-specific paths and the author's verbatim quotes are redacted; all paths are derived at runtime. Hashes are computed over LF-normalized text. Regenerate with the private publish/make-public.mjs, which also re-runs the leak scan.",
   "files": [
+    {
+      "rel": ".gitattributes",
+      "size": 66,
+      "sha256": "1a1dbe176bc233b499d35a57db7513f2941c99ab9759f177830c9149be99005b"
+    },
     {
       "rel": ".gitignore",
       "size": 541,
       "sha256": "cdb7065b2f286af00a82fb83bbdb44c8d84ea8eee2ce62e0120874d4511b818b"
     },
     {
+      "rel": "01-skill/README-安装说明.md",
+      "size": 5069,
+      "sha256": "274f74a5427230f2d2290c048cc5d36d671ff60d2c5db4a739b3025c161c74ca"
+    },
+    {
+      "rel": "01-skill/SKILL.md",
+      "size": 32550,
+      "sha256": "c64c6c3c4da304f195922d3bd8e09ca0c904be3a5ca41456bc581078be300c6d"
+    },
+    {
       "rel": "01-skill/bill-compare.mjs",
-      "size": 7849,
-      "sha256": "06ad081f903d7bf913ebbd21fa78784be7dc0ef13e3131c9be41fdee46f6e5dc"
+      "size": 7831,
+      "sha256": "477baf2bcf87eadb28a78d6cd425677c8f621cd8f139adebc64a99cf812f61d5"
     },
     {
       "rel": "01-skill/bill.mjs",
@@ -19,19 +34,14 @@
       "sha256": "210e343b483d66d993d42278b3b4204a4745fa055ed9319c98e5c4454cf5842a"
     },
     {
+      "rel": "01-skill/brain-policy.test.mjs",
+      "size": 6948,
+      "sha256": "f13ac411af54660dbaa1e69e801fdacfd6c99580a4a0fe888c9852b0672a8270"
+    },
+    {
       "rel": "01-skill/context-audit.mjs",
-      "size": 4154,
-      "sha256": "a4e0b344cb6151f085f8ad7dcf94899b5b68e6ee3611ab5e05dd4e7c0ca8dbd6"
-    },
-    {
-      "rel": "01-skill/experiments/lab/common.mjs",
-      "size": 16911,
-      "sha256": "46479558a8d3b1eb011faa00cb544b92b334aff20b15265a2b96c50ec5df7af4"
-    },
-    {
-      "rel": "01-skill/experiments/lab/L1_gear_vs_cube.mjs",
-      "size": 6099,
-      "sha256": "9da508eac816e9d7b42b2f4c257eff38f4054dee1f1a79210b890c2b642240dc"
+      "size": 4130,
+      "sha256": "8ad398f13aed158fd177dcdada0b6f7c3653704d1c8c6c2a4271d0457c9cb3fd"
     },
     {
       "rel": "01-skill/experiments/lab/L10_stale_voice.mjs",
@@ -40,8 +50,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L11_false_pass.mjs",
-      "size": 4412,
-      "sha256": "83260d6ead7c96e5f2066f48b22de92b46236c1e55a3ed8a7d422edbc6d6fdc9"
+      "size": 4456,
+      "sha256": "35a08102a6f669b75d0a7e8fcfc29b69de0649968ad659adf535a5a756784a75"
     },
     {
       "rel": "01-skill/experiments/lab/L12_conditional_consent.mjs",
@@ -55,8 +65,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L14_voice_claims.mjs",
-      "size": 10481,
-      "sha256": "b3d47741dc0fb2d19eb0944bcb544511e5ce59526a549620c3f18c1c741812ea"
+      "size": 10485,
+      "sha256": "f2841aa1e25bc0491589bdc3027941a1f619ce7869cff3a460c7a7960ed8d1ec"
     },
     {
       "rel": "01-skill/experiments/lab/L15_roster_seat.mjs",
@@ -70,8 +80,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L17_ancestor_init.mjs",
-      "size": 7150,
-      "sha256": "3ca3b61978958655d018021e60f0fc7b2205a6c1a073d6b7cb3114b4c50042e8"
+      "size": 7149,
+      "sha256": "5ddbd0a4b3767e8d58d28942d8d828cd7fedfc7e2053f8c5fb867be639632947"
     },
     {
       "rel": "01-skill/experiments/lab/L18_fake_evidence.mjs",
@@ -80,8 +90,18 @@
     },
     {
       "rel": "01-skill/experiments/lab/L19_roles_health.mjs",
-      "size": 7353,
-      "sha256": "a5239ffd918208bcb9f8607bb4c4f7a0d6e37de1a86c36a95ccca8511877e221"
+      "size": 7258,
+      "sha256": "65872f18706cc9f0522cf66e1ba8cd4e56d6fba98ff56ccc225eef93bf864fcf"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L1_gear_vs_cube.mjs",
+      "size": 6099,
+      "sha256": "9da508eac816e9d7b42b2f4c257eff38f4054dee1f1a79210b890c2b642240dc"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L20_role_speech.mjs",
+      "size": 6592,
+      "sha256": "35d0f8a35f1ebe7bcca800d373eab561b9336e8e35ee1d771ccb9473152592d1"
     },
     {
       "rel": "01-skill/experiments/lab/L2_half_done.mjs",
@@ -89,14 +109,9 @@
       "sha256": "48d0a956a1dd30006a15d3855172e72581975cd379c33941fa0a68c215fb872e"
     },
     {
-      "rel": "01-skill/experiments/lab/L20_role_speech.mjs",
-      "size": 6869,
-      "sha256": "2abe8fbf9d17fa7994d11afdbc8c98821b81a6a47af5b345c2db152324ddf2de"
-    },
-    {
       "rel": "01-skill/experiments/lab/L3_isolation.mjs",
-      "size": 5378,
-      "sha256": "7e4758e2363bb08b914c1ebf9b73980d4e0f43317e65105cc12424743c598c1d"
+      "size": 5375,
+      "sha256": "3612d583a75fae72da8f65739fc4174f1a077de01c685bb62f5b7d40abea3a0c"
     },
     {
       "rel": "01-skill/experiments/lab/L4_frozen_baseline.mjs",
@@ -105,8 +120,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L5_attribution_laundering.mjs",
-      "size": 8208,
-      "sha256": "adb76fef96b3cf53bc0534b096e3efffd03bb0e4c8d84bfb63f9dfbd7b43cac3"
+      "size": 8333,
+      "sha256": "ac26032024842795bb830353ddf7edd1a0f841cb2adb33b4c169db7b92985205"
     },
     {
       "rel": "01-skill/experiments/lab/L6_false_accusation.mjs",
@@ -115,8 +130,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L7_compression.mjs",
-      "size": 7967,
-      "sha256": "b1f8cc20b03f0ce979f9fa7d2f02d79d6f34776f3c636001b4f3107b5094249d"
+      "size": 8009,
+      "sha256": "bb0785b9befda12c95ecef78db91599ff93531955dcdb060526d598c8168559e"
     },
     {
       "rel": "01-skill/experiments/lab/L8_incidents.mjs",
@@ -125,8 +140,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L9_negation_flip.mjs",
-      "size": 10496,
-      "sha256": "eb6ffa818f42c7d3162467e32c207af9c193a2801f928961c4beda5b11c6a2ef"
+      "size": 10490,
+      "sha256": "47435bdc4a7b7a532e6a91af58040904b811ca3cf9853fa9829ad6a67d119feb"
     },
     {
       "rel": "01-skill/experiments/lab/README.md",
@@ -134,59 +149,54 @@
       "sha256": "d093f6401466747bf4cbc089ccf2b2f53333a98e046df7a87d9632fa0b6e3d04"
     },
     {
+      "rel": "01-skill/experiments/lab/common.mjs",
+      "size": 16911,
+      "sha256": "46479558a8d3b1eb011faa00cb544b92b334aff20b15265a2b96c50ec5df7af4"
+    },
+    {
       "rel": "01-skill/experiments/lab/run-all.mjs",
       "size": 4992,
       "sha256": "371e14a1f60c3df96242dc8f85f7925af5ae0858eec461606feb848fe6c79ac6"
     },
     {
-      "rel": "01-skill/README-安装说明.md",
-      "size": 5069,
-      "sha256": "274f74a5427230f2d2290c048cc5d36d671ff60d2c5db4a739b3025c161c74ca"
-    },
-    {
       "rel": "01-skill/selftest.mjs",
-      "size": 93219,
-      "sha256": "6b901c0ab61e556ed8fa6170ccf006a1803ee62c81b4f65c379f5cda0fcaf506"
-    },
-    {
-      "rel": "01-skill/SKILL.md",
-      "size": 28487,
-      "sha256": "cebf485937087041bd36d54ef045b9c39f2b83b7d605b547e53095b6cc04198c"
+      "size": 93150,
+      "sha256": "507ebc34458f891eaa6ff0f9d5b9becd5c5587e08b66b9d57000d0bd746b109a"
     },
     {
       "rel": "01-skill/warden.mjs",
-      "size": 359649,
-      "sha256": "70251592daa3557a7dd7e8f35f888cccf6f88e3cb0037f8ecd1c8790d62c0b19"
+      "size": 366812,
+      "sha256": "e85534246f6ae122f4e694c3181f9fb8ffe8240bf0082932b89ae446bb7a3bc7"
+    },
+    {
+      "rel": "02-preset-roles/README.md",
+      "size": 16228,
+      "sha256": "7d42e9620d1c7aca76d38005ef5bb16b50c1deec9e420fabee6745c5667cdebd"
     },
     {
       "rel": "02-preset-roles/agent.cordis.yml",
-      "size": 19879,
-      "sha256": "5218147cdb8b903c36fb979c0851f715bf00dc5c9f5b771080b0c4b57a35809d"
+      "size": 23785,
+      "sha256": "fd46d82023ba524bc980ef88905c9cc42839b726681fa4febf36a9423b7e3e2e"
+    },
+    {
+      "rel": "02-preset-roles/preset-selftest.mjs",
+      "size": 9776,
+      "sha256": "b2b56c316ed9976e9b372f0792e74676de5da2daee3678e3d73faf8432ad72c1"
     },
     {
       "rel": "02-preset-roles/preset.yml",
-      "size": 596,
-      "sha256": "766c1c2373c3847ab5eab23bd3964bb9e79f1ab43aace40f4f7edc6b0ff36f52"
+      "size": 1051,
+      "sha256": "65c0388988c4d016f11f2ca7873e90d67128ccf2b36c9904cbb0607d60c43629"
     },
     {
-      "rel": "03-host-plugin/gate.mjs",
-      "size": 21976,
-      "sha256": "8d6872ee2c04be8bc92c0d8b47c7c6be134abd29b172379e88be7607ab4405e9"
+      "rel": "02-preset-roles/team-guard.mjs",
+      "size": 32752,
+      "sha256": "202ea14e0f97ae6893553038665fac897ccae5e14fe26b6388502416dbbaa05b"
     },
     {
-      "rel": "03-host-plugin/gate.selftest.mjs",
-      "size": 17739,
-      "sha256": "d0d4581b1be30ceb796d4e43a68a2860c8e93302556d49140e1664bfe3d9ccb3"
-    },
-    {
-      "rel": "03-host-plugin/plugin-io.js",
-      "size": 32547,
-      "sha256": "ca2680fd290b0b6eed0760c59d16f6eabbc1da6c489a9d31514abea7d7d5f8cc"
-    },
-    {
-      "rel": "03-host-plugin/preset-default-guard.mjs",
-      "size": 13352,
-      "sha256": "3b62600991eb877412d119a94c58aeeb408d55598c6342e933f24023a3363a28"
+      "rel": "02-preset-roles/team-guard.selftest.mjs",
+      "size": 24241,
+      "sha256": "7960341a16f6ae254c90f07e01e200e450343567fd3d343bfc3e79719ed1021e"
     },
     {
       "rel": "03-host-plugin/RESTORE.md",
@@ -194,9 +204,29 @@
       "sha256": "588db5a89abdd42b43fb5ee642107c340953352859af69b33600824fb87f73e1"
     },
     {
+      "rel": "03-host-plugin/gate.mjs",
+      "size": 21915,
+      "sha256": "f3219f61263f05aade9fef2ba58c0848e2928c6b65ce19d5b87013b523bb91eb"
+    },
+    {
+      "rel": "03-host-plugin/gate.selftest.mjs",
+      "size": 17728,
+      "sha256": "8a9a07ce40e9821756687048f8ec5855cc0bde4782d2619595f95f4116474b5d"
+    },
+    {
+      "rel": "03-host-plugin/plugin-io.js",
+      "size": 32067,
+      "sha256": "3dab0670067f3528fea463f00074f23a0cd08ac8b7a104e4ddc7d01ea075b320"
+    },
+    {
+      "rel": "03-host-plugin/preset-default-guard.mjs",
+      "size": 13178,
+      "sha256": "afc7e5845e3e9cfa4d30203469cf502df15b24760080f563bd75be4107d0e2d5"
+    },
+    {
       "rel": "03-host-plugin/warden-watch.js",
-      "size": 17722,
-      "sha256": "bb7055fd4d41bd186475cdb4a211b89c8143d45da9128140b3d72af01930f4a3"
+      "size": 17720,
+      "sha256": "68cb1eb16e772fb20a27957c1b9ce477cc822f0e012ef0a3ff9432208c2a97c5"
     },
     {
       "rel": "04-config/cordis.patch.yml",
@@ -210,8 +240,8 @@
     },
     {
       "rel": "INSTALL.md",
-      "size": 10990,
-      "sha256": "851af31c60deb2dc043fd9ae0f938a861b9247a5409a5b1fe7fe14a1793a22fa"
+      "size": 13145,
+      "sha256": "a436cb06d70b1f282f3729fe62e78e6b05e6f0489dd91e4ecb610826ce77619f"
     },
     {
       "rel": "LICENSE",
@@ -220,8 +250,8 @@
     },
     {
       "rel": "README.md",
-      "size": 9468,
-      "sha256": "210a0c938d03dcccc3116d0c0f903d148e1138fad144e2c5588d39dcfdede614"
+      "size": 12879,
+      "sha256": "0ac6c33077d096c2fce6169b4873f6296167ce6a3ae867db26426bf0eb0aa381"
     },
     {
       "rel": "THIRD-PARTY-NOTICES.md",

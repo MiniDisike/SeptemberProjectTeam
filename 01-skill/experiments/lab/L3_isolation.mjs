@@ -51,7 +51,7 @@ export default async function run() {
   {
     const r = runWarden(LAB_ROOT, ['vote'], { sessionId: A.sessionId });
     const rejected = r.code === 2 || /拒绝操作/.test(r.stdout);
-    c.check('① 在容器目录 D:\\user\\grok\\_lab 跑 → 必须被拒绝',
+    c.check('① 在容器目录 <WORKSPACE>\\_lab 跑 → 必须被拒绝',
       rejected,
       `exit=${r.code}；${grab(r.stdout, [/拒绝操作/, /装着别的工程/, /议题/], 3).join(' | ') || '（没有任何拒绝信息）'}`);
 

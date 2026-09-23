@@ -12,7 +12,7 @@
 | 目录 | 装到 | 是什么 |
 |---|---|---|
 | `01-skill/` | `~/.dsh/skills/task-warden/` | **主脚本**（`warden.mjs` 等）+ 实验台。DSH 从这个路径加载 skill |
-| `02-preset-roles/` | `~/.dsh/.agent-presets/roles/` | **agent preset**（8 席角色、硬动作） |
+| `02-preset-roles/` | `~/.dsh/.agent-presets/roles/` | **agent preset**（8 席角色、硬动作）+ **角色协议加固插件 `team-guard.mjs`**。⚠ 必须**整目录**复制：`agent.cordis.yml` 里有 `name: ./team-guard.mjs`，少了那个文件 preset 会挂不上 |
 | `03-host-plugin/` | 任意固定目录，建议 `<你的工程>/task-warden/plugin/` | **常驻 Host 插件**：执行前闸、交付闸、自动启用守卫、刷新端 `plugin-io.js`。⚠ **自动启用守卫会改写 `~/.dsh/settings.yaml`**（只改 `agent-presets.default` 那一行，**每次改写前留一份 `settings.yaml.bak-preset-guard-<时间戳>`**） |
 | `04-config/` | **不要整个覆盖** —— 照第 3 步手改 | 两处配置 |
 | `05-project-docs/` | 工程根（有 `.git` 的那一层） | **公开版不含此目录**（那是"某个项目的账"，含作者自己的原话与机器路径）。要建自己的账本：在工程根跑 `node warden.mjs init` |
@@ -36,7 +36,31 @@ node "$HOME/.dsh/skills/task-warden/selftest.mjs"
 
 ### 2. 装 preset
 
-把 `02-preset-roles/` 复制到 `~/.dsh/.agent-presets/roles/`。
+把 `02-preset-roles/` **整个目录**复制到 `~/.dsh/.agent-presets/roles/`（6 个文件一个都不能少 —— 组合文件引用了 `./team-guard.mjs`）。
+
+复制完可以原地自检（不需要 DSH 在跑）：
+
+```sh
+cd ~/.dsh/.agent-presets/roles
+node preset-selftest.mjs        # 组合形状，62 条
+node team-guard.selftest.mjs    # 加固插件逻辑，122 条
+```
+
+⚠ **改了 `team-guard.mjs` 必须重启 DSH**：判断 preset 要不要换一代只看 `agent.cordis.yml` 的
+`{mtimeMs, size}`（`dsh-agent-presets/lib/index.js` 的 `compositionStamp`），插件文件变了 stamp 不变；
+而且就算换代，Node 的 ESM 缓存也会把同一个 URL 的旧模块还给你。只改 `agent.cordis.yml` 时，**新开窗口**即可。
+
+#### 本次改动（相对上一版）
+
+- **新增 `02-preset-roles/team-guard.mjs`**：角色协议从"persona 里的一大段文字"改成三种躲不掉的形态 ——
+  ① 常驻协议段（system prompt 最后一节）② 每步刷新的实时状态快照 ③ 第一次 `write`/`edit` 前的角色闸
+  （本会话还没派过角色就拒一次；一个会话最多一次；子代理放行；异常 fail-open；带一个有界观测探针）。
+- **新增 `subagent_coder`**：写代码时按文件/模块切块，**同一条消息里并行派多个**。
+- **行为变化**：脑子（独立审查）**默认只派 1 个** —— 只有 ①结论/来源冲突 ②第 1 个查得不细
+  ③要探索更多做法 三种触发条件成立时才派第 2 个，且必须 `--trigger` 记下是哪种。
+  原来那张「高风险产物（总目标/架构/交付验收）要 2 个脑子」的表**已作废**。
+- **新增两个自检**：`01-skill/brain-policy.test.mjs`（44 条）、`02-preset-roles/preset-selftest.mjs`（62 条）。
+- `MANIFEST.json` 已重算（按 LF 归一化后的 sha256）。
 
 ### 3. 只改两处配置
 
@@ -126,7 +150,7 @@ node -e "const m=require('./MANIFEST.json'),fs=require('fs'),c=require('crypto')
 | Directory | Install to | What it is |
 |---|---|---|
 | `01-skill/` | `~/.dsh/skills/task-warden/` | The main scripts (`warden.mjs`, …) + the lab suite. DSH loads the skill from this path |
-| `02-preset-roles/` | `~/.dsh/.agent-presets/roles/` | The agent preset (8 role seats, hard actions) |
+| `02-preset-roles/` | `~/.dsh/.agent-presets/roles/` | The agent preset (8 role seats, hard actions) + the **role-protocol hardening plugin `team-guard.mjs`**. ⚠ Copy the **whole directory**: the composition references `./team-guard.mjs`, and the preset will not mount without it |
 | `03-host-plugin/` | any fixed directory, e.g. `<your-project>/task-warden/plugin/` | Standing Host plugin: pre-execution gate, delivery gate, auto-enable guard |
 | `04-config/` | **Do not overwrite** — hand-edit, see step 3 | Two configuration spots |
 | `05-project-docs/` | your project root (the layer with `.git`) | **Private edition only**: one project's ledger + handoff docs |

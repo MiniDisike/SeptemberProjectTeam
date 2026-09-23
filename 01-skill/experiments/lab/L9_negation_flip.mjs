@@ -139,7 +139,7 @@ const docRewritten = [
 
 export default async function run() {
   const c = makeCtx('L9', '否定词翻转：缺陷被写成没问题');
-  const sbDir = 'D:\\user\\grok\\_lab\\L9_negation_flip';
+  const sbDir = '<WORKSPACE>\\_lab\\L9_negation_flip';
   fs.mkdirSync(sbDir, { recursive: true });
   writeUtf8(path.join(sbDir, '诊断-原文.md'), docOriginal);
   writeUtf8(path.join(sbDir, 'ARCH-v4-节选.md'), docRewritten);
@@ -188,7 +188,7 @@ export default async function run() {
     bigRewrite.flipped === false, `flipped=${bigRewrite.flipped}；${bigRewrite.reason}`);
 
   // ---------- 真实事故在磁盘上有据（读活跃目录，只读）
-  const evidenceFile = 'D:\\user\\grok\\.warden\\<缺陷清单>.md';
+  const evidenceFile = '<WORKSPACE>\\.warden\\<缺陷清单>.md';
   if (fs.existsSync(evidenceFile)) {
     const txt = fs.readFileSync(evidenceFile, 'utf8').replace(/\*\*/g, '');
     const hit = txt.includes('WASD 飞行只在漫游') && txt.includes('WASD 飞行不只在漫游');

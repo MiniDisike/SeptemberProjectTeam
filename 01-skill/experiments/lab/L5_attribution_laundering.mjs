@@ -83,10 +83,10 @@ export default async function run() {
     '# 归属核查样本',
     '',
     '## A · 疑似 AI 清单（归属存疑）',
-    `- 用户原话：「${AI_CHECKLIST}」`,
+    `- 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」`,
     '',
     '## B · 真人原话样本',
-    `- 用户原话：「${REAL_QUOTE}」`,
+    `- 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」`,
     '',
   ];
   writeUtf8(path.join(sb.dir, 'doc.md'), lines.join('\n'));
@@ -94,7 +94,7 @@ export default async function run() {
   const lineB = lines.findIndex((l) => l.includes(REAL_QUOTE)) + 1;
 
   const src = runWarden(sb.dir, ['sources', '--add', REAL_WORKSPACE], { sessions: 'real', sessionId: sb.sessionId });
-  c.check('前置 · sources --add D:\\user\\grok：语料指向真实工作区',
+  c.check('前置 · sources --add <WORKSPACE>：语料指向真实工作区',
     src.code === 0 && src.stdout.includes(encodeWorkspace(REAL_WORKSPACE)),
     `exit=${src.code}；${grab(src.stdout, [/^--/, /合计真用户消息/], 3).join(' | ')}`);
 
@@ -124,7 +124,7 @@ export default async function run() {
     writeUtf8(path.join(pb.wdir, 'SPEC.md'), spec('session-lab-L5_pasteback'));
     seedSession(pb, { assistants: [PASTED_AI], users: [PASTED_AI], assistantFirst: true });
     writeUtf8(path.join(pb.dir, 'doc.md'),
-      `# 贴回样本\n\n## C · 用户贴回的 AI 文本（归属存疑）\n- 用户原话：「${PASTED_AI}」\n`);
+      `# 贴回样本\n\n## C · 用户贴回的 AI 文本（归属存疑）\n- 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」\n`);
     const r = runWarden(pb.dir, ['quotes', 'doc.md'], { sessionId: pb.sessionId });
     const v = parseBuckets(r.stdout).get('doc.md:4');
     c.check('⑤ 负控 · AI 先写、用户贴回来 → 判 quoted-from-ai（不是 verbatim）',

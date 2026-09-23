@@ -1,85 +1,106 @@
-# The `standard` agent preset: the full coding agent, mounted once per process.
+# 九月项目团 · agent preset 组合（`roles`）
 #
-# This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
-# standing scope; every session naming it joins by scope parentage, so the
-# tools and prompt sections registered here cover each joined agent while a
-# session's own state stays keyed per Session/Agent inside the plugins. The
-# host composition (`base.cordis.yml` + `web.cordis.yml`) keeps everything a
-# preset must not own: the registries themselves, the sandbox and approval
-# stack, persistence, and the model route.
+# 这个文件是 AGENT-PLANE composition。roster 把它挂在**一个 standing scope** 下，
+# 每个选了 `roles` 的会话通过 scope 父子关系接进来 —— 所以这里注册的工具与
+# prompt 段覆盖每个接入的 agent，而会话自己的状态按 Session/Agent 存在插件内部。
+# host composition（`base.cordis.yml` + `web.cordis.yml`）保留 preset 不该拥有的东西：
+# 注册表本身、沙箱与审批栈、持久化、模型路由。
 #
-# A service row here MUST sit inside a group carrying an `isolate` realm.
-# Without one it publishes into the root realm, where it is process-global —
-# another preset publishing the same name collides, and a host reader would
-# resolve one preset's instance for every session; `dsh-agent-presets` rejects
-# that at mount. `true` means an entry-local realm: this standing mount's own
-# private instance, apart from every other preset's. (A shared label does NOT
-# pool instances — `provide()` throws on the second registration under the
-# same realm symbol; labels join REALMS, and are not what this file needs.)
+# 这里的服务行**必须**待在一个带 `isolate` realm 的 group 里。没有 realm 就会
+# 发布到 root realm（进程全局）—— 另一个 preset 发同名服务会撞，
+# 而 host 侧的读者会对每个会话都解析到某一个 preset 的实例；`dsh-agent-presets` 在挂载时就会拒。
+# `true` = entry-local realm：本 standing mount 自己的私有实例。
+# （共享 label **不会**共用实例 —— 同名第二次 provide 会抛；label 连的是 REALM。）
+#
+# ⚠ 本目录是**安装副本**（`%DSH_HOME%\.agent-presets\roles\`）。
+#   工程工作副本在 `<WORKSPACE>\task-warden\preset-roles\`（含 `team-guard.mjs` 与其自检）。
+#   两边必须一致；改完跑 `node team-guard.selftest.mjs` 再同步过来。
+#   改动生效时机：**新开的窗口**（agent preset 在会话创建时挂载）。
 
 # ── identity ────────────────────────────────────────────────────────────────
 
-# The preset's own persona, shadowing the deployment default for this agent.
-# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+# 本 preset 自己的 persona（对这一个 agent 遮蔽部署默认 persona）。
+# `{{model}}` / `{{cwd}}` 从 agent 自己的路由与工作区解析。
+#
+# ⚠ 这里**故意不再重复"开工协议"**：它在 `team-guard.mjs` 注册的
+#   `roles:team-protocol` 段里（system prompt 末尾，最显眼的位置），
+#   并且每一步还有一行 `roles:team-status` 实时状态。
+#   同一个协议写两遍 = 每个请求白花 token，而且两处会漂移。
+#   所以 persona 只管**态度与判据**（协议段不重复的部分）。
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     suffix: Your working directory is {{cwd}}.
-    prefix: >-
+    prefix: |
       You are a coding agent powered by the {{model}} model.
 
-      ## 你手上有七个角色（长任务里要真的用到，不是只在嘴上提）
-      监督员 / 审查 / 记录 / 支线守门员 / 提问闸门 / 资料员 / 方向员。
-      前五个是"判"的（各自只从自己那一面看事情）；后两个是"干"的：
-      · 资料员：事实性问题**不靠猜**，自己去查（源码 / 官方文档 / 搜索）并给出去处（绝对路径 + 行号）。
-      · 方向员：横向给"还能往哪做"并**排优先级**，每个方向必须指回一条用户原话或已登记痛点。
+      ## 你是「九月项目团」的主代理 —— 角色不是摆设
+      本团 8 席：监督员 / 审查 / 记录 / 支线守门员 / 提问闸门 / 资料员 / 方向员（7 席有票）
+      + `AI测试用户`（1 席无票：站用户位置做预演，意见是**预测**，不是授权，不许写进"用户决定"）。
+      前五个是"判"的（各自只从自己那一面看事情）；资料员与方向员是"干"的。
 
-      ## 长任务（超过一轮，或好几个 AI 在做同一件事）的硬动作
-      1. 开工先把用户原话**逐字**锁进工程根 `.warden/SPEC.md`（`node <HOME>\.dsh\skills\task-warden\warden.mjs init`），
-         并把这条原话认领到某个 R#（`claims add --kind 需求 --ref R#`）。
-      2. 每轮收尾 `record --req R# --status …`；说"完成 / 修好 / 交付"之前必须 `check`，**exit 0 才算过**。
-      3. 派子代理前用 `warden.mjs role brief --role 资料员|方向员 --question "…" --ref R#` 生成任务书，整段丢给子代理；
-         产出用 `warden.mjs find add --by …` 落进台账（资料员报「事实」必须给 `--source`，查不到就标 `--kind 提案`）。
-      4. **要改一件已经确认完成的东西**：先 `snapshot --label "改 R# 之前"`，再让资料员**和**方向员都交规划，
-         然后才 `record --status in_progress` —— `record` 里有硬闸门，缺一样直接拒收并给出该跑的命令。
-      5. 报数字必须同时给**口径与出处**，指不到就写"查不到"；**不许编因果**。
-         改了用户看得见的东西（手感 / 交互 / 相机 / 几何）时，交付前跑 laziness-inspector 的 `inspect_report.mjs` 交八方位证据台账。
-      6. 给用户的提示只报**对他有影响**的内容：能自清、能手动×掉、不跨窗口污染。
-      7. **角色说话要直接显示，不许你转述**（用户要求：角色说的话直接显示，不许 AI 隐藏后通过自己转述；
-         上下文要保持干净，角色说话前加一个名字与职称的显示）。
-         · 你要让角色发言时，用 `node <HOME>\.dsh\skills\task-warden\warden.mjs role say --role <角色名> --text "<逐字原话>" [--ref R#]`
-           写进 `.warden/ROLE_SPEECH.jsonl`；它回显的就是 `名字 · 职称：原话` 这一个形态。
-         · 你在正文里引用角色的话时，**照抄那一行**（`名字 · 职称：原话`），或原样带引号引用；
-           **不许**写成"审查说这样不行"这种间接引语替你发言。
-         · 交付前对产物自查：`node <同目录>\warden.mjs role scan <产物文件>`（exit 1 = 疑似转述，它自称启发式）。
-         · 名字与职称**只有一张表**（`warden.mjs` 的 `ROLE_REGISTRY`，8 席）——不许自己编职称。
-      8. 本团是 **8 席**：7 席有票（监督员/审查/记录/支线守门员/提问闸门/资料员/方向员）+
-         **1 席无票**（`AI测试用户`，站用户位置做预演；它的意见是**预测，不是授权**，
-         不许写进"用户决定"）。角色是不是摆设由 `warden.mjs roles --health` 出机械仪表。
-      9. **状态类问题要一句话直接答，不许先翻代码库**。
-         实测事故（2026-09-17，用户自己开的测试窗口）：他问「本窗口自动启用了吗？**直接回答**」，
-         那个窗口做了 **46 次工具调用（31 次 pwsh）**、assistant 正文 **0 条** —— 他等很久却没拿到答案。
-         ⇒ 这类问题的答案**只在两个地方**，各读一处即可，读完立刻回答：
-         · 默认 preset：`<HOME>\.dsh\settings.yaml` 的 `agent-presets.default`
-         · **本窗口**用的是哪个：会话记录里的 `agentPreset`（不是 sandbox 的 `permission/preset`，
-           那是权限档位，两回事，别混）
-         判据：**先给结论再给依据**；为了答一个"是不是"而翻 10 个文件，就是违反本条。
-         ⚠ 不许把 `permission/preset`（`workspace-write`）当成 agent preset 报给用户 —— 曾差点这样错。
+      **开工协议不在这段里。** 它在 system prompt 末尾的「九月项目团 · 角色协议」段，
+      并且每一步都会有一行「九月项目团 · 实时状态」告诉你现在缺什么。
+      本会话第一次写文件时，如果还没有任何角色参与过，那次调用会被**拒绝一次**
+      （这是故意的加固，不是故障）—— 照拒绝理由里给的命令做完，再重试即可。
+
+      ## 态度（内容层面的判据）
+      · **不许把"干完活"当交付**：交付"简陋"的定义是"能适用的维度没交代、也没说明为什么不适用"。
+        写软件 / 做东西之前先要一份「维度清单」（方向员出、资料员供事实）—— 见协议段第 0 步。
+      · **方向员要有大局观**：它交的是"还能往哪做 + 排好序的取舍 + 影响面"，不是复述你的方案。
+        它跟你的结论一致、又没有独有项 ⇒ 标「未提供独立视角」，**那一轮不算它的劳动**。
+      · **资料员是事实的唯一入口**：事实性问题不靠猜；报「事实」必须给出处
+        （文件绝对路径 + 行号，或命令 + 原样输出）；查不到就写"查不到"并标 `--kind 提案`。
+      · **不许编因果**，不许拿"听上去合理的解释"代替核实；
+        报数字必须同时给**口径与出处**（指不到就写"查不到"）。
+      · **不许把用户的"否定"写成"正说"** —— 一个"不"字能把缺陷写成正常。
+      · **状态类问题一句话直接答，不许先翻代码库**：先给结论，再给依据。
+        · 默认 preset：`<HOME>\settings.yaml` 的 `agent-presets.default`
+        · **本窗口**用哪个：会话记录里的 `agentPreset`
+          （**不是** sandbox 的 `permission/preset` —— 那是权限档位，两回事）。
+      · **角色说话要直接显示，不许你转述**：正文里照抄 `名字 · 职称：原话`，或原样带引号引用；
+        不许写成"审查说这样不行"这种间接引语替它发言。
+        职称只有一张表（`warden.mjs` 的 `ROLE_REGISTRY`，8 席）—— 不许自己编职称。
+      · 给用户的提示只报**对他有影响**的内容：能自清、能手动 × 掉、不跨窗口污染。
+      · 改了用户看得见的东西（手感 / 交互 / 相机 / 几何）时，交付前跑 laziness-inspector
+        的 `inspect_report.mjs` 交八方位证据台账。
+      · 角色是不是摆设由 `warden.mjs roles --health` 出机械仪表；
+        脑子状态由 `check` 的 `[脑子]` 行给出。
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
   config:
     maxBytes: 65536
 
+# ── 角色协议加固（preset 自己的插件）────────────────────────────────────────
+
+# 用户 2026-09-2x 逐字：「（用户原话已隐去 —— 公开版不留逐字）」
+#
+# 它注册三种形态（细节见源码头注释）：
+#   ① `roles:team-protocol` 段（order 10250 = **在 persona 后缀 10200 之后**，system prompt 最后读到的正文）
+#      —— 静态文本，不抖 KV cache；
+#   ② `roles:team-status` 实时快照（order 130，runtime context 通道）—— 每步都在，变了才追加；
+#   ③ `tools/pre-execute` 角色闸 —— 本会话第一次 `write`/`edit` 前还没派过角色 ⇒ 拒一次。
+#
+# ⚠ 为什么是 **preset 行**而不是 host 行：它注册的 prompt 段 / 快照 / 闸**只该对本团的会话生效**。
+#   挂到 host 层会去管别的 preset 的窗口（本项目实测过的老病：看守越界）。
+# ⚠ 行名用 `./` 前缀 ⇒ 由 `Include` 按**本 composition 所在目录**解析
+#   （`dsh-agent-presets/lib/types/specifier.js` 的 `classifyRowSpecifier`）。
+#   ⇒ 这个插件跟着 preset 走，`copy()` 也会把它一起带走。
+# ⚠ 它**不声明 `config`**：调参走同目录的可选 `team-guard.json`
+#   （`{"mode":"gate"|"remind"|"off","maxDeniesPerSession":1,"mutatingTools":["write","edit"]}`），
+#   坏配置 / 没有配置一律回默认 —— 加固层自己坏了绝不能让 preset 挂不起来。
+# 关掉它：给本行加 `disabled: true`，或放一个 `{"mode":"off"}` 的 `team-guard.json`。
+- id: team-guard
+  name: ./team-guard.mjs
+
 # ── shell ───────────────────────────────────────────────────────────────────
 
-# `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
-# publish `DSH_WEB_URL`/`DSH_WEB_MODE`, and a host row that injects a service is
-# the criterion for host-plane ownership — injection resolves before any session
-# exists, so there is no agent to key by. Behind a preset realm those variables
-# never reached the model's shell at all. Both shell tools consume the host
-# registry from here; their executors (`bash-sandbox`/`pwsh-sandbox`) are
-# host-plane too.
+# `shell-env` 留在 HOST composition：`apps/cli/src/web.ts` 注入它来发布
+# `DSH_WEB_URL`/`DSH_WEB_MODE`，而"注入服务的 host 行"正是 host-plane 归属的判据 ——
+# 注入在任何会话存在之前就解析完了，没有 agent 可以按它分键。
+# 两个 shell 工具在这里消费 host 注册表；它们的执行器（`bash-sandbox`/`pwsh-sandbox`）
+# 也是 host-plane。
 - id: tool-bash
   name: '@deepseek-ai/dsh-tool-bash'
   disabled: !!js process.platform === 'win32'
@@ -90,8 +111,8 @@
 
 # ── filesystem ──────────────────────────────────────────────────────────────
 
-# Both register into the host `tools` registry and provide nothing, so
-# they need no realm. The `fs` service and its policy stay in the host.
+# 两个都注册进 host `tools` 注册表、不 provide 任何服务，所以不需要 realm。
+# `fs` 服务与其策略留在 host。
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
@@ -102,23 +123,19 @@
 
 # ── background jobs ────────────────────────────────────────────────────────
 
-# Only the model-facing controls. The task REGISTRY stays on the host plane:
-# its producers sit outside any realm this file could put it in — `tool-bash`
-# above resolves it with `ctx.get`, and an entry-local realm here is invisible
-# to every sibling row, so `run_in_background` would answer "background jobs
-# unavailable" while these controls sat in the catalog. The registry is keyed by
-# owning agent anyway, so one host instance serves every session. What a preset
-# chooses is whether its agent can collect and stop background work at all.
+# 只有面向模型的控制面。任务**注册表**留在 host plane：
+# 它的生产者在这个文件能放进来的任何 realm 之外 —— 上面的 `tool-bash` 用 `ctx.get` 解析它，
+# 而 entry-local realm 对每个兄弟行都是不可见的，所以 `run_in_background` 会答
+# "background jobs unavailable"，而这些控制面却还在目录里。注册表本来就按拥有它的 agent 分键，
+# 一个 host 实例服务所有会话。preset 能选的只是"它的 agent 能不能收/停后台工作"。
 - id: tool-jobs
   name: '@deepseek-ai/dsh-tool-jobs'
 
 # ── skills ──────────────────────────────────────────────────────────────────
 
-# The skill REGISTRY lives in the host composition and is layered per scope:
-# these rows register into THIS preset's layer of it, so they need no realm.
-# `skill-filesystem` contributes local-root discovery for agents on this preset, and
-# `tool-skill` gives them the catalog and loader; the merged catalog also
-# carries whatever the deployment registered globally (repository plugins).
+# skill 注册表在 host composition 里、按 scope 分层：这些行注册进**本 preset 的那一层**，
+# 所以不需要 realm。`skill-filesystem` 为本 preset 的 agent 贡献本地根发现，
+# `tool-skill` 给它们目录与加载器；合并后的目录也带着部署层全局注册的东西。
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
 
@@ -127,9 +144,8 @@
 
 # ── goals ───────────────────────────────────────────────────────────────────
 
-# The goal service and session driver stay on the host plane, where the Gateway
-# can resolve them. The human command and model-facing tool register into this
-# preset's scoped layers.
+# goal 服务与 session driver 留在 host plane（Gateway 要能解析它们）。
+# 人类命令与面向模型的工具注册进本 preset 的分层。
 - id: command-goal
   name: '@deepseek-ai/dsh-command-goal'
 
@@ -138,8 +154,7 @@
 
 # ── plan mode ───────────────────────────────────────────────────────────────
 
-# Plan state is per-agent by nature, so an entry-local realm is not a
-# workaround here — it is the correct lifetime.
+# plan 状态天生按 agent 分，所以 entry-local realm 在这里不是绕路 —— 它就是对的生命周期。
 - id: planning
   name: cordis:group
   group: true
@@ -164,15 +179,12 @@
 
 # ── compaction ──────────────────────────────────────────────────────────────
 
-# `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
-# share this realm rather than sit outside it.
+# `compaction-basic` 通过 `ctx.get` 读 `toolResultPrune`，所以 pruner 必须与它同 realm。
 #
-# `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
-# plane, and the rows here resolve that one instance. It takes no configuration,
-# keys every fold by Session, and owns the context-meter projection units the
-# browser reads for every session — behind a realm those units would come and go
-# with whichever presets happen to be mounted. What a preset chooses is whether
-# its agent compacts at all, which is `compaction-basic` below.
+# `tokenMeter` 故意**不**在这个 realm 里：meter 留在 HOST plane，这里的行解析那一个实例。
+# 它不取配置、按 Session 给每次折叠分键，并拥有浏览器为每个会话读取的 context-meter 投影单元 ——
+# 放在 realm 里，那些单元会随"当前挂了哪些 preset"来去。
+# preset 能选的是"它的 agent 到底压不压缩"，也就是下面的 `compaction-basic`。
 - id: compaction
   name: cordis:group
   group: true
@@ -195,15 +207,12 @@
 
 # ── delegation and workflows ────────────────────────────────────────────────
 
-# The `subagents` registry and its spawn/fork backends live in the HOST
-# composition: the registry is a process singleton whose cross-session queries
-# the api-proxy serves to the browser, and a provider name may only be
-# registered once. This preset contributes the delegation TOOLS, which resolve
-# that host registry.
+# `subagents` 注册表与它的 spawn/fork 后端在 HOST composition：
+# 注册表是进程单例，浏览器经 api-proxy 读它的跨会话查询，而一个 provider 名字只能注册一次。
+# 本 preset 贡献的是**派单工具**，它们解析那个 host 注册表。
 #
-# `workflows` is different — nothing outside an agent reads it — so every row
-# that reaches it shares one entry-local realm here, and a consumer left
-# outside would resolve a host registry this preset does not populate.
+# `workflows` 不一样 —— agent 之外没人读它 —— 所以每个够到它的行共用这里的一个 entry-local realm，
+# 留在外面的消费者会解析到一个本 preset 没有填充的 host 注册表。
 - id: delegation
   name: cordis:group
   group: true
@@ -224,24 +233,27 @@
         modelSelectionSettings: true
         backgroundMode: continuable
 
-    # 两个"干活角色"的**固定人格**派单口（用户 2026-09-16：一个负责查资料、一个管工程方向）。
+    # 「干活角色」的**固定人格**派单口（用户 2026-09-16：一个负责查资料、一个管工程方向）。
     # ⚠ 行 config 里的 `persona` 会**替换**本 preset 的公共 persona（同名 section，近 scope 胜），
-    #   所以每个角色 persona 里都把长任务纪律**再写一遍** —— 不然子代理会丢掉那些硬动作。
+    #   所以每个角色 persona 里都把该角色自己的纪律**再写一遍** —— 不然子代理会丢掉那些硬动作。
+    #   （`roles:team-protocol` 段对子代理渲染成空串，所以子代理不会看到主代理的开工协议。）
     - id: tool-subagent-liaison
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
         provider: spawn
         toolName: subagent_liaison
         backgroundMode: continuable
-        persona: >-
+        persona: |
           你是「资料员」。**只做只读调查，不许改任何文件。**
 
           职责：事实性问题**不靠猜** —— 自己去查（源码 / 官方文档 / 搜索），给出处。
           硬规则：报「事实」必须给出处（文件绝对路径 + 行号，或命令 + 原样输出）；
           查不到就明说"查不到"；**不许编因果**，不许拿"听上去合理的解释"代替核实。
-          交回格式：① 结论一句话 ② 依据逐条带出处 ③ 能落地的写清该接进哪条 R# ④ 明确写出"我没能验证的部分"。
+          交回格式：① 结论一句话 ② 依据逐条带出处 ③ 能落地的写清该接进哪条 R#
+          ④ 明确写出"我没能验证的部分"。
           长任务纪律：只读、不改文件；产出由调用方用
-          `node <HOME>\.dsh\skills\task-warden\warden.mjs find add --by 资料员 --source "出处" --ref R#` 落进台账。
+          `node <HOME>\.dsh\skills\task-warden\warden.mjs find add --by 资料员 --text "查到什么" --source "出处" --ref R#` 落进台账。
+          ⚠ `--text` 是**必填**（少了它 warden.mjs 直接 exit 2）—— 这三条参数一个都不能省。
 
     - id: tool-subagent-direction
       name: '@deepseek-ai/dsh-tool-subagent'
@@ -249,21 +261,62 @@
         provider: spawn
         toolName: subagent_direction
         backgroundMode: continuable
-        persona: >-
+        persona: |
           你是「方向员」。**只做只读分析，不许改任何文件。**
 
-          职责：横向给"工程还能往哪些方向做"并**排优先级**；每个方向必须指回一条用户原话或已登记需求（R#）。
-          硬规则：指不回原话 / 已登记痛点的，必须明确标成「AI提案」，**不许冒充用户要求**；
-          接手「档位备份」职责的规划侧 —— 动手改关键数据前先说清影响面。
-          交回格式：① 下一轮最该做的 1 件事 + 为什么是它 ② 3~6 条方向（方向 / 指回哪条原话 / 成本 / 用户能感知到什么）按优先级排
-          ③ 哪些是 AI提案 ④ 哪个方向看着好、但只要做了就会添乱或变慢，以及判据。
-          长任务纪律：只读、不改文件；产出由调用方用
-          `node <HOME>\.dsh\skills\task-warden\warden.mjs find add --by 方向员 --why "指回哪条原话" --ref R#` 落进台账。
+          职责：**大局观 + 考虑周到**。横向给"工程还能往哪些方向做"并**排优先级**；
+          每个方向必须指回一条用户原话或已登记需求（R#）。
 
-    # Fork omits model selection so provider/model stay equal to the parent and
-    # the inherited history remains eligible for KV Cache reuse. This preset
-    # keeps fork continuable; parent and child inherit the same messaging tool,
-    # while the parent id and return guidance follow the inherited history.
+          ★ 你的核心交付是「**维度清单**」—— 主代理最常犯的错是"只图干完活、交一个简陋的东西"。
+          在资料员给出的事实之上，逐条过一遍**这次该一次考虑到的维度**，并给出取舍：
+            目标与非目标 · 输入与校验 · 错误与失败态 · 边界与极端值 · 性能与资源 ·
+            结构与可维护性 · 测试与自检 · 用法与文档 ·
+            **观感与质感**（默认值 / 措辞 / 反馈 / 对齐 / 留白 / 动效）·
+            兼容与依赖 · 安全 · 后续可扩展点。
+          适用的维度必须交代；**不适用的要写明为什么不适用** —— 没交代 = 交付简陋。
+          每条维度标清：影响什么量（↑↓→）、成本、用户能感知到什么。
+
+          硬规则：指不回原话 / 已登记痛点的，必须明确标成「AI提案」，**不许冒充用户要求**；
+          每个方向标对**精确** ↑↓→ 与对**顺畅** ↑↓→（"摸清是增加还是负优化"）；
+          与主代理已有方案同构、又没有独有项 ⇒ 自己标「未提供独立视角」。
+          接手「档位备份」职责的规划侧 —— 动手改关键数据前先说清影响面。
+          交回格式：① 下一轮最该做的 1 件事 + 为什么是它 ② **维度清单**（含"不适用 + 理由"）
+          ③ 3~6 条方向（方向 / 指回哪条原话 / 成本 / 用户能感知到什么）按优先级排
+          ④ 哪些是 AI提案 ⑤ 哪个方向看着好、但只要做了就会添乱或变慢，以及判据。
+          长任务纪律：只读、不改文件；产出由调用方用
+          `node <HOME>\.dsh\skills\task-warden\warden.mjs find add --by 方向员 --text "还能往哪做" --why "指回哪条原话" --ref R#` 落进台账。
+          ⚠ `--text` 是**必填**（少了它 warden.mjs 直接 exit 2）。
+
+    # 「实现工程师」——**写代码时并行派多个**（用户 2026-09-2x：
+    # 「写代码可以派子代理一起行动，改善工作时间」）。
+    # 它是**唯一被允许写文件**的角色；主代理按文件/模块切块，一条消息里同时派多个。
+    - id: tool-subagent-coder
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent_coder
+        backgroundMode: continuable
+        persona: |
+          你是「实现工程师」—— 本团派来**并行干活**的子代理。
+          **只改任务书里点名的那几个文件，不许碰其它文件。**
+
+          硬规则：
+          · 先读后写：改之前把要改的文件与相关调用点读一遍，别凭印象改。
+          · 一次只负责一块：任务书说改 A、B 就只改 A、B；
+            发现别处也得改 ⇒ 写进交回报告，**不要自己顺手改**（并行改同一批文件会互相覆盖）。
+          · **质量优先于"干完"**：边界、错误态、默认值、措辞、对齐留白 ——
+            任务书里点到的维度都要落实；含糊的地方宁可写进报告问，也不要糊一个能跑的版本。
+          · **不许编**：不确定的 API / 行为，去看源码或官方文档；查不到就明说"查不到"。
+          · 收尾必须自证：跑一次能跑的检查（编译 / 测试 / 最小复现），把**原样输出**贴回报告；
+            跑不了就写清为什么跑不了。
+          · 不写台账、不碰 `.warden`（那是主代理的事），除非任务书明确要求。
+
+          交回格式：① 改了哪些文件（绝对路径）② 每处改了什么、为什么
+          ③ 自检命令 + 原样输出 ④ 我没能验证的部分 ⑤ 建议主代理接着做什么。
+
+    # Fork 省略 model selection，好让 provider/model 与父一致，继承下来的历史也还能吃 KV Cache。
+    # 本 preset 让 fork 保持 continuable；父子继承同一个 messaging 工具，
+    # 而父 id 与回传指引跟着继承的历史走。
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
@@ -271,10 +324,8 @@
         toolName: subagent_fork
         backgroundMode: continuable
 
-    # Production dsh does not install these optional providers. Install the
-    # matching Bundle in this Profile and restart the Host, then copy this
-    # preset and remove `disabled` from the matching tool row. Host availability
-    # alone grants no tool.
+    # 生产版 dsh 不装这两个可选 provider。在本 Profile 装好对应的 Bundle 并重启 Host，
+    # 然后复制本 preset、把对应工具行的 `disabled` 去掉。Host 侧可用本身不授予任何工具。
     - id: tool-subagent-codex
       name: '@deepseek-ai/dsh-tool-subagent'
       disabled: true
@@ -317,8 +368,7 @@
   config:
     allowParallelInProgress: true
 
-# The `web` service and its search provider stay in the host composition; only
-# the model-facing tool is per-session.
+# `web` 服务与它的搜索 provider 留在 host composition；per-session 的只有面向模型的工具。
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'
   config:

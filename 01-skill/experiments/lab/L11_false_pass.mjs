@@ -36,9 +36,9 @@ export default async function run() {
   writeUtf8(path.join(sb.dir, 'empty_ok.md'),
     '# 一份没有任何「归给用户」写法的文档\n\n- 这里只是普通说明文字，没有把话归给谁。\n');
   writeUtf8(path.join(sb.dir, 'bad.md'),
-    '# 含伪造归属的文档\n\n## A\n- 用户原话：「某功能要在最后阶段一次做完，别分期」\n');
+    '# 含伪造归属的文档\n\n## A\n- 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」\n');
   writeUtf8(path.join(sb.dir, 'good.md'),
-    `# 全是真原话的文档\n\n## B\n- 用户原话：「${QUOTE}」\n`);
+    `# 全是真原话的文档\n\n## B\n- 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」\n`);
 
   // 负控1：路径不存在 → 0 个文件
   const missing = runWarden(sb.dir, ['quotes', 'no_such_file_xyz.md'], { sessionId: sb.sessionId });

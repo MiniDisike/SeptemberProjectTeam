@@ -261,7 +261,7 @@ export function findNestedProjects(dir, maxDepth = 3) {
  *   第 12 条原文要求「`check` **必须打印每条被忽略路径及理由**」——而这一句**完全没实现**：
  *   `findNestedProjects` 全仓只有 1 个调用点（CLI 前置守卫），`check()` 根本不调用它；
  *   深度截断（`maxDepth`）与 SKIP 名单都是**静默丢弃、零输出**。
- *   后果（实测）：`findNestedProjects('D:\\user')` 报 48 条，而 `<工程>` /
+ *   后果（实测）：`findNestedProjects('<WORKSPACE>')` 报 48 条，而 `<工程>` /
  *   `<工程>-worktree` **一条都看不见**（深度 4 > 3）——**没人能看出守卫漏了谁**，
  *   只能靠手工扫（方向员就是这么扫出来的）。
  *
@@ -678,7 +678,7 @@ export function corpusEntries(root, { force } = {}) {
          *   于是语料里的反斜杠是**转义过的 `\\`**，而用户原话里是单个 `\`
          *   ⇒ **凡「原话」里带 Windows 路径，`check` 的逐字核对必然不通过**。
          *   实测：`corpus.includes('<HOME>\...\<需求对照表>.md完善九月项目团的制作')`
-         *   = false，而语料里那一段其实是 `D:\\user\\...`。
+         *   = false，而语料里那一段其实是 `<WORKSPACE>\\...`。
          *   这条对本用户尤其致命 —— **他的消息经常就是一条文件路径**（他习惯把文件丢过来说"完善这个"），
          *   于是那些原话**永远无法被认定为"他说过"**，正好落进「说过的事情被丢掉」那口井。
          *
@@ -1286,11 +1286,18 @@ export function check(root, { specText, devText, rounds, watches } = {}) {
         + head + (items.length > 3 ? `；…另有 ${items.length - 3} 个产物` : '')
         + '。要重新派脑子：`node warden.mjs brain brief --artifact <产物>`。');
     } else if (single.length) {
-      warns.push(`[脑子] ${single.map((x) => x.artifact).join('、')} 只有**单审**（高风险产物要求 2 个脑子）。`);
+      // ⚠ 用户 2026-09-2x 逐字：「（用户原话已隐去 —— 公开版不留逐字）」
+      //   ⇒ 单审**不再是欠账**，所以这一行不再是"你还差一个"的催促，
+      //     而是"现在是正常的，只有这三种情况才加派"的说明。
+      warns.push(`[脑子] ${single.map((x) => x.artifact).join('、')} 是**单审** —— 这是**默认**（默认就 1 个，不是欠账）。`
+        + `只有三种情况才派第 2 个：${BRAIN_TRIGGER_IDS.join(' / ')}`
+        + `（\`brain brief --artifact <产物> --trigger <哪一种>\`）。`);
     } else if (items.length) {
       warns.push(`[脑子] ${items.length} 个产物有复审记录、且审的就是当前版本。`);
     } else {
-      warns.push('[脑子] 台账里**一个产物都没有** —— 脑子从没跑过（或跑了没落账）。高风险产物用 `brain brief --artifact <产物>` 起一轮。');
+      warns.push('[脑子] 台账里**一个产物都没有** —— 脑子从没跑过（或跑了没落账）。'
+        + '要定稿的产物用 `brain brief --artifact <产物>` 起一轮（**默认 1 个**；'
+        + `只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才加派第 2 个）。`);
     }
   } catch (e) {
     warns.push(`[脑子] ⚠ 脑子台账读不动（这一条不是"没问题"，是"没查成"）：${String(e.message).slice(0, 120)}`);
@@ -2912,9 +2919,29 @@ export function auditClaims(root, rec) {
 }
 
 /**
+ * 「第 2 个脑子」的**触发条件**。
+ *
+ * 用户 2026-09-2x 逐字：「（用户原话已隐去 —— 公开版不留逐字）」
+ *
+ * ⚠ 这条**推翻**了原来那张表（"总目标 / 架构 / 交付验收 → 2 个脑子（必须两个）"）。
+ *   一次性派两个的代价是双份成本，而且第二个脑子在**没有触发条件**时只是在复述第一个 ——
+ *   那正是本项目 §一①「差异化」判据要抓的"摆设"：**一个角色的价值 = 它提出的、别人提不出来的东西**。
+ *   所以现在的默认是 **1 个**（`单审` 是正常态，不是欠账）；第 2 个只在下面三种条件下派，
+ *   而且**必须把是哪种记下来**（`brain record --trigger`）—— 否则事后分不清
+ *   "真的需要两个"还是"照旧习惯派了两个"。
+ */
+export const BRAIN_TRIGGERS = {
+  conflict: '结论 / 来源冲突：两份判断（或两个来源）不一致 —— 要判**哪边成立**，并给可机检的证据',
+  shallow: '不细致：第 1 个脑子给的问题太笼统、没证据、或明显没看完 —— 要**逐条给出能在文件里 grep 到的原话**',
+  explore: '要探索更多可能：需要"**还有哪些做法 / 哪些坑**"，不是"这行不行" —— 除 accept/reject 外另给 ≥3 条别的做法与各自代价',
+};
+/** 三个触发条件的 id（顺序固定，输出里直接用它） */
+export const BRAIN_TRIGGER_IDS = Object.keys(BRAIN_TRIGGERS);
+
+/**
  * 审理状态。判"这份产物能不能定稿"：
  *   0 个脑子 → 没审
- *   1 个脑子 → 单审（高风险的必须凑到 2 个）
+ *   1 个脑子 → 单审（**这就是默认**；只有冲突 / 不细 / 要探索更多时才加派第 2 个）
  *   2 个脑子一致 → 可以定稿
  *   2 个脑子冲突且无裁判 → ★ 不许定稿
  *   有裁判 → 按裁判的判
@@ -2976,7 +3003,14 @@ export function brainStatus(dir, root) {
       blocking += 1;
     }
     else if (brains.length === 0) { state = '没审'; }
-    else if (brains.length === 1) { state = '单审'; note = '（高风险产物要求 2 个）：' + brains[0].verdict; }
+    else if (brains.length === 1) {
+      state = '单审';
+      // ⚠ 措辞是**判据的一部分**：原来写"高风险产物要求 2 个"，
+      //   读起来像"单审 = 欠账" ⇒ 于是每次都习惯性派两个（用户明确否掉了这个做法）。
+      //   现在如实说：默认就是 1 个，第 2 个要**触发条件**。
+      const trg = brains[0].trigger && BRAIN_TRIGGERS[brains[0].trigger] ? `（这一份是第 2 个脑子，触发条件：${brains[0].trigger}）` : '';
+      note = `（**默认就是 1 个**；只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才派第 2 个）${trg}：` + brains[0].verdict;
+    }
     else {
       const vs = new Set(brains.map((b) => b.verdict));
       // 问题集重合度：**所有脑子两两算 Jaccard 再平均**（原来只比前两个，4 个脑子也报"两个"）
@@ -3006,14 +3040,40 @@ export function brainStatus(dir, root) {
   return { out, blocking, judges: judges.length };
 }
 
-/** 给"脑子"的任务书 —— 项目无关，任何产物都能审 */
-export function brainBrief(root, artifact) {
+/**
+ * 给"脑子"的任务书 —— 项目无关，任何产物都能审。
+ *
+ * `trigger`（可选）∈ {@link BRAIN_TRIGGER_IDS}：说明**为什么加派第 2 个脑子**。
+ * 它只描述"哪里需要更细 / 更多可能"，**绝不透露任何人的结论** ——
+ * 独立性是这一层唯一的价值，一旦给了别人的判决，它就变成评论者而不是独立审查者。
+ */
+export function brainBrief(root, artifact, trigger) {
   const dir = path.join(root, WARDEN_DIR);
   const rel = path.relative(root, artifact).replace(/\\/g, '/');
+  const trg = trigger !== undefined && Object.hasOwn(BRAIN_TRIGGERS, trigger) ? trigger : undefined;
   return [
     `你的角色是「**脑子**」—— 一个独立审查者。你的任务不是执行，是**判断**：判断下面这份产物该不该被接受。`,
     '',
     '**你没被告知任何人的结论。你看到的原始材料就是全部。**',
+    ...(trg === undefined ? [] : [
+      '',
+      `## ⚠ 你是**第 2 个脑子** —— 加派你的触发条件是 \`${trg}\``,
+      `  ${BRAIN_TRIGGERS[trg]}`,
+      '',
+      '  · 触发条件只说"哪里需要更细 / 更多可能"，**没有告诉你第 1 个脑子判了什么** ——',
+      '    不许去猜、不许去找它的记录（找到就等于破坏独立性，这次审查作废）。',
+      ...(trg === 'explore' ? [
+        '  · 除了 accept / reject，**必须另给 ≥3 条别的做法**，每条写：做法 / 代价 / 什么条件下它更好。',
+      ] : []),
+      ...(trg === 'shallow' ? [
+        '  · 上一轮的问题是"太笼统、没证据" ⇒ 你**每条判断都必须附一句能在文件里 grep 到的原话**，',
+        '    否则这条判断按"没有证据"作废。',
+      ] : []),
+      ...(trg === 'conflict' ? [
+        '  · 有两份判断不一致 ⇒ 你要**独立判定哪边成立**，并给出可机检的证据（针/检查方式），',
+        '    不要折中成"两边都有道理"。',
+      ] : []),
+    ]),
     '',
     '## 被审产物',
     `  ${artifact}`,
@@ -3041,9 +3101,11 @@ export function brainBrief(root, artifact) {
     '  verdict: accept | reject',
     `  issues:  用逗号分隔的问题短名（例如"总目标被截断,漏7条支线,F/R9错位"）`,
     '  然后逐条给证据。',
+    '  ★ 另交 `claims`：`[{"code":"E07","needle":"能在文件里 grep 到的原样字符串","check":"artifact-lacks"}]`',
+    '    —— 没有可机检指控的判决，机器无法复核（`brain audit` 会说"这次没复核任何东西"）。',
     '',
     '## 交回之后（由调度方执行）',
-    `  node warden.mjs brain record --artifact ${rel} --brain A --verdict reject --issues "…"`,
+    `  node warden.mjs brain record --artifact ${rel} --brain ${trg === undefined ? 'A' : 'B'} --verdict reject --issues "…"${trg === undefined ? '' : ` --trigger ${trg}`}`,
   ].join('\n');
 }
 
@@ -3246,9 +3308,7 @@ export function dissentExplained(t) {
 /**
  * ==================== 「角色是不是摆设」的机械仪表 ====================
  *
- * 用户 2026-09-16 的原话（逐字）：
- *   「等下它停下要把我们这几段讨论的内容**逐一按标准**写到插件里，要有**审查有记录有各种角色的
- *     劳动在其中各司其职的呈现**，**不能糊弄人导致最后角色只是个摆设**。」
+ * 用户 2026-09-16 的原话（逐字）：「（用户原话已隐去 —— 公开版不留逐字）」
  *   「**监督员要保证几个角色是正确在运行。**」
  *
  * 所以"呈现"和"摆设"的差别**必须可机检**，否则又是一句文本期望。这里只算数，判据分两类，
@@ -4747,22 +4807,38 @@ function main(argv) {
     const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : undefined; };
     if (sub === 'brief') {
       const a = opt('artifact');
-      if (!a) { console.log('[用法] node warden.mjs brain brief --artifact .warden/ARCH.md'); return 2; }
+      if (!a) { console.log('[用法] node warden.mjs brain brief --artifact .warden/ARCH.md [--trigger conflict|shallow|explore]'); return 2; }
+      const trigger = opt('trigger');
+      if (trigger !== undefined && !Object.hasOwn(BRAIN_TRIGGERS, trigger)) {
+        console.log(`[用法] --trigger 只能是 ${BRAIN_TRIGGER_IDS.join(' | ')}（你说的：${trigger}）`);
+        console.log('  默认**不传** = 派第 1 个脑子（默认就 1 个）；只有触发条件成立时才传它加派第 2 个。');
+        return 2;
+      }
       const p = path.isAbsolute(a) ? a : path.join(root, a);
-      console.log(brainBrief(root, p));
+      console.log(brainBrief(root, p, trigger));
+      if (trigger !== undefined) {
+        console.log('');
+        console.log(`★ 这是**第 2 个脑子**（触发条件 ${trigger}）。独立性要求：**只给材料，不给任何人的结论**。`);
+      }
       return 0;
     }
     if (sub === 'record') {
       const artifact = opt('artifact'); const brain = opt('brain'); const verdict = opt('verdict');
-      if (!artifact || !brain || !verdict) { console.log('[用法] brain record --artifact X --brain A --verdict accept|reject [--issues "a,b"] [--role judge] [--reason "…"]'); return 2; }
+      if (!artifact || !brain || !verdict) { console.log('[用法] brain record --artifact X --brain A --verdict accept|reject [--issues "a,b"] [--role judge] [--reason "…"] [--trigger conflict|shallow|explore]'); return 2; }
       if (!['accept', 'reject'].includes(verdict)) { console.log('[用法] --verdict 只能是 accept 或 reject'); return 2; }
+      const trigger = opt('trigger');
+      if (trigger !== undefined && !Object.hasOwn(BRAIN_TRIGGERS, trigger)) {
+        console.log(`[用法] --trigger 只能是 ${BRAIN_TRIGGER_IDS.join(' | ')}（你说的：${trigger}）`);
+        console.log('  --trigger 记的是"**为什么加派了第 2 个脑子**"；派第 1 个时不要传。');
+        return 2;
+      }
       let claims = [];
       if (opt('claims')) {
         try { claims = JSON.parse(opt('claims')); } catch { console.log('[用法] --claims 必须是 JSON 数组，例：[{"code":"E07","needle":"QE键暂时不加进去","check":"artifact-lacks"}]'); return 2; }
         if (!Array.isArray(claims)) { console.log('[用法] --claims 必须是 JSON 数组'); return 2; }
       }
-      recordBrain(dir, { artifact, brain, verdict, issues: opt('issues') ?? '', role: opt('role') ?? 'brain', reason: opt('reason') ?? '', claims, session: currentSessionId(), artifactHash: artifactHash(root, artifact), sections: sectionHashes(root, artifact) });
-      console.log(`${ROLE_STAMP.gate} 已记：脑子 ${brain} 对 ${artifact} 判 ${verdict}${opt('issues') ? ` · 问题：${opt('issues')}` : ''}`);
+      recordBrain(dir, { artifact, brain, verdict, issues: opt('issues') ?? '', role: opt('role') ?? 'brain', reason: opt('reason') ?? '', claims, ...(trigger === undefined ? {} : { trigger }), session: currentSessionId(), artifactHash: artifactHash(root, artifact), sections: sectionHashes(root, artifact) });
+      console.log(`${ROLE_STAMP.gate} 已记：脑子 ${brain} 对 ${artifact} 判 ${verdict}${trigger === undefined ? '' : ` · 触发条件 ${trigger}`}${opt('issues') ? ` · 问题：${opt('issues')}` : ''}`);
       const st = brainStatus(dir, root);
       console.log('');
       for (const o of st.out) console.log(`  ${o.artifact}  ${o.brains} 个脑子 → ${o.state}  ${o.note}`);
@@ -4806,7 +4882,13 @@ function main(argv) {
     // 默认：状态
     const st = brainStatus(dir, root);
     console.log(`${ROLE_STAMP.gate} 脑子角色组 · 审理状态\n`);
-    if (!st.out.length) { console.log('  还没有任何产物被审过。'); console.log('  派第一个脑子：node warden.mjs brain brief --artifact <产物>'); return 0; }
+    if (!st.out.length) {
+      console.log('  还没有任何产物被审过 —— 脑子从没跑过（或跑了没落账）。');
+      console.log('  派**第 1 个**脑子：node warden.mjs brain brief --artifact <产物>');
+      console.log(`  （默认就 1 个；只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 触发时才 `);
+      console.log('    brain brief --artifact <产物> --trigger <哪一种> 加派第 2 个。）');
+      return 0;
+    }
     for (const o of st.out) {
       console.log(`  ${o.artifact}`);
       console.log(`     ${o.brains} 个脑子 → **${o.state}**  ${o.note}`);
@@ -4817,8 +4899,13 @@ function main(argv) {
       }
     }
     console.log('');
-    console.log('扩编规则：高风险产物（总目标/架构/交付验收）要 2 个脑子；');
-    console.log('          2 个冲突 → 加 1 个裁判（--role judge）；裁决前不许定稿。');
+    // ⚠ 整句放在**一个字符串里**（原来拆成两行 console.log）：拆断之后，
+    //   脱敏脚本按 `「…」` 整块替换时会把中间的 `');` + `console.log('` 一起吃掉 ⇒ 语法坏掉。
+    console.log('扩编规则（用户 2026-09-2x 逐字：「（用户原话已隐去 —— 公开版不留逐字）」）：');
+    console.log('  · **默认只派 1 个** —— `单审` 是正常态，不是欠账；');
+    console.log(`  · 只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才加派第 2 个，`);
+    console.log('    并用 `brain record --trigger <哪一种>` 把理由记下来；');
+    console.log('  · 2 个冲突 → 加 1 个裁判（--role judge）；裁决前不许定稿。');
     return st.blocking ? 1 : 0;
   }
   if (cmd === 'roles') {
@@ -5453,7 +5540,8 @@ function main(argv) {
       // 前缀必须**按署名给**（谁说的就写谁）——
       // 原来只有"资料员 else 方向员"两分支，监督员会被打成【方向 · 工程方向员】（实测踩到）。
       // ⚠ 归属提醒（用户 2026-09-16 澄清）：「提示前带角色名」这个写法是 **AI 提的建议、用户没反对**，
-      //   不是用户提的要求（见 SPEC.md R38）。别拿它当"用户要求过"的证据。      const stampBy = { 资料员: ROLE_STAMP.research, 方向员: ROLE_STAMP.direction, 监督员: ROLE_STAMP.supervisor };
+      //   不是用户提的要求（见 SPEC.md R38）。别拿它当"用户要求过"的证据。
+      const stampBy = { 资料员: ROLE_STAMP.research, 方向员: ROLE_STAMP.direction, 监督员: ROLE_STAMP.supervisor };
       const stamp = stampBy[r.record.by] ?? ROLE_STAMP.keeper;
       console.log(`${stamp} 记下了 · ${r.record.by} · ${r.record.kind}`);
       console.log(`  ${r.record.text}`);
@@ -5924,6 +6012,22 @@ const HELP = `warden.mjs —— 需求监督员 / 交付审查 / 数据账本
       exit 1 = 被拦下（已答过）。
   node warden.mjs ask --verdict decide|ask --reason "…"
       记下"脑子"那一层的判决。
+  node warden.mjs brain [--artifact X]
+      脑子角色组的审理状态：每个产物几个脑子、处于「没审 / 单审 / 一致 / 一致·互补 /
+      ★冲突·未裁决 / ★改过但未复审」哪一种。
+      ⚠ **默认只派 1 个脑子** —— 「单审」是正常态，**不是欠账**。
+      用户原话（2026-09-2x）：「（用户原话已隐去 —— 公开版不留逐字）」
+  node warden.mjs brain brief --artifact <产物> [--trigger conflict|shallow|explore]
+      打印**给脑子的任务书**（职责 / 被审产物 / 可读材料 / 交回格式），整段丢给独立子代理。
+      不传 --trigger = 派第 1 个；传了 = **加派第 2 个**，任务书里会写清为什么加派，
+      但**仍然不给任何人的结论**（独立性是这一层唯一的价值：给了判决它就只是评论者）。
+  node warden.mjs brain record --artifact <产物> --brain A|B --verdict accept|reject
+                            [--issues "a,b"] [--claims '[...]'] [--trigger …]
+                            [--role judge --reason "…"]
+      落账。**必须交 --claims**（可机检指控）：没有它，判决既不能被证实也不能被驳倒。
+  node warden.mjs brain audit --artifact <产物>
+      机器复核指控：查不出来的指控被驳回，那个脑子的判决要重估。exit 1 = 有被驳回的。
+      一条可机检指控都没有时，它会明说"这次没复核任何东西"（不许当成"产物没问题"）。
   node warden.mjs map
       架构总图：总目标 → 支线 → 子项，按 覆盖度 / 最近活动 / 归属可信度 排出来。
       只对「整条支线从没被碰过」或「3 轮以上没动」才出声。写进 .warden/MAP.md。
