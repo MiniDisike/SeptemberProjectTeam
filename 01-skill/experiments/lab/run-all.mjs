@@ -35,6 +35,22 @@ const MODULES = [
   'L18_fake_evidence',
   'L19_roles_health',
   'L20_role_speech',
+  'L21_preset_default_guard',
+  'L22_plan_gate',
+  'L23_roles_criteria',
+  'L24_duty_loop',
+  'L25_copy_sync',
+  'L26_corpus_text',
+  'L27_finding_isomorphism',
+  'L28_no_fake_decision',
+  'L29_feed_freshness',
+  'L30_negation_matcher',
+  'L31_evidence_after_mtime',
+  'L32_delegation',
+  'L33_recon_enforced',
+  'L34_mustnot_addressed',
+  'L36_steer_mode',
+  'L35_steer_criterion',
 ];
 
 const argv = process.argv.slice(2);

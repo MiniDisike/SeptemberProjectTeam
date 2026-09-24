@@ -240,6 +240,32 @@ try {
   }
 } catch (e) { autoInit = 'threw:' + String((e && e.message) || e).slice(0, 60) }
 
+/**
+ * ★★ **结构化事实：本账本里到底有几条需求**（2026-09-24 加；修「审查」查出的 A1）。
+ *
+ * 为什么要有它：回合边界那个"这个窗口还没有账本"的判据，**原来是按中文子串判的**
+ *   （`/缺 \.warden\/SPEC\.md/`）。而**自动建骨架之后的常态**是：SPEC.md **存在**但零条 `## R#`，
+ *   此时 check 的真实文案是 `[需求] SPEC.md 里一条需求都没有` —— **不含那句子串**
+ *   ⇒ `no-ledger` 分支**永远不会响**，它当时不闯祸只是因为 `checkExit===1 → 不说话` 兜住了。
+ *   审查的原话：「**fail-closed 是运气，不是判据**」；而且文案一改（比如我那个 R5 修复
+ *   把 `[结构] 缺 .warden/SPEC.md` 换成了 `[需求] SPEC.md 里一条需求都没有`）判据就死。
+ *
+ * ⇒ 现在把**事实**算出来放进快照（`reqCount`），判据读事实、不读文案。
+ *   `reqCount === 0` 就是"没有账本"的**定义**，与任何一句话怎么写都无关。
+ */
+let reqCount = null
+let specExists = false
+try {
+  const sp = path.join(ROOT, '.warden', 'SPEC.md')
+  specExists = fs.existsSync(sp)
+  if (specExists) {
+    const txt = fs.readFileSync(sp, 'utf8')
+    reqCount = (txt.match(/^##\s+R\d+\b/gm) || []).length
+  } else {
+    reqCount = 0
+  }
+} catch (e) { reqCount = null }
+
 try {
   const fd = fs.openSync(tmpOut, 'w')
   try {
@@ -580,6 +606,11 @@ const snap = {
   // ★ 2026-09-23：这一轮有没有**自动建过账本骨架**（R5 前置 / R25「自动建轮次」）。
   //   放在快照里，探针与回合边界的判据才读得到"这一步真跑过没有"。
   autoInit: autoInit,
+  // ★★ 2026-09-24：**结构化事实** —— 本账本里 `## R#` 的条数，以及 SPEC 在不在。
+  //   回合边界的"没有账本"判据读这两个字段，**不读中文文案**
+  //   （审查查出 A1：按子串判时，我自己的 R5 修复改了文案 ⇒ 判据永远不命中，安全是碰巧的）。
+  reqCount: reqCount,
+  specExists: specExists,
   line: headline,
   detail: bullets.join(' ‖ '),
   claimed: claimed,

@@ -348,10 +348,25 @@ module.exports = {
      */
     function steerDecision(snap) {
       if (!snap || typeof snap !== 'object') return { should: false, why: 'no-snapshot' }
-      // ⚠ 结构性判据要看 **detail**（第一版只看 line ⇒ 永远匹配不上，把新窗口卡死）
-      const text = String(snap.detail || '') + '\n' + String(snap.line || '') + '\n' + String(snap.notice || '')
       const speech = Number(snap.speechCount || 0)
-      if (/缺 \.warden\/SPEC\.md/.test(text)) {
+      /**
+       * ★★ **2026-09-24 修 A1：判据改成读结构化事实，不读中文文案。**
+       *
+       * 「审查」的原话（它把这条列为"还活着、建议优先"）：
+       *   「『修好』的那版，结构性判据**仍然匹配不上真实文本** —— 现在的安全是碰巧的，不是判据对了。
+       *    当前判的是 `/缺 \.warden\/SPEC\.md/`，而 **SPEC 存在但空**时（自动建骨架之后的常态），
+       *    真实 `detail` 是 `[需求] SPEC.md 里一条需求都没有`，**不含那句子串**
+       *    ⇒ `no-ledger` 分支**永远不会响**；它现在不闯祸只是靠 `checkExit===1 → 不说话` 兜住
+       *    （**fail-closed 是运气，不是判据**）。」
+       *
+       * ⇒ 现在读 `reqCount`（`plugin-io.js` 算出来放进快照的**事实**：SPEC 里 `## R#` 的条数）。
+       *   `reqCount === 0` **就是**"没有账本"的定义，与任何一句话怎么写都无关 ——
+       *   文案再改（我自己那次 R5 修复就改过）也不会让判据失效。
+       *   ⚠ `reqCount` 缺失（老快照/读不到）时**不许当成 0** —— 那会误报；宁可不说。
+       */
+      const reqCount = snap.reqCount
+      const hasStructuredFact = reqCount !== null && reqCount !== undefined
+      if (hasStructuredFact && Number(reqCount) === 0) {
         return { should: true, kind: 'no-ledger', once: 'session',
           text: '[九月项目团] 这个窗口还没有账本：`.warden/SPEC.md` 里一条需求都没有。'
             + '先把用户这次说的原话**逐字**写进 `.warden/SPEC.md` 成 `## R1 · <标题>`（含 `- 原话:` / `- 必须:` / `- 不要:` / `- 子项:`），'
@@ -489,7 +504,13 @@ module.exports = {
             //   原来只传 `cwds`（会话工作区列表）—— 而 shell 命令完全可能跑在**别处**
             //   （`cd D:\其他工程; Set-Content …`），那样被盯的档位文件就找不到了。
             //   `exec.cwd` 不存在时是 undefined，judgeShell 会退回 cwds/process.cwd()（不改变原行为）。
-            cwd: (exec && exec.cwd) || undefined,
+            // ★ 2026-09-24 修 E2（「资料员」+「审查」各查一遍）：**`exec.cwd` 根本不存在** ——
+            //   `dsh-tools` 全文 0 处 `cwd`，`ToolExecutionInput` 声明里也没有 ⇒ 这一行永远是 undefined，
+            //   `cwd` 分支是**死代码**。
+            //   现在改读**同一份数据的真字段**：`exec.agent.session.header.cwd`
+            //   （`agent` 由 `dsh-agent:210` 的 `fused(payload) = {...payload, agent}` 注入；
+            //    官方 `dsh-hooks-codex:146` 读的就是 `agent?.session.header.cwd`）。
+            cwd: (exec && exec.agent && exec.agent.session && exec.agent.session.header && exec.agent.session.header.cwd) || undefined,
             cwds: CWDS,          // 相对路径按会话工作区（可能不是 ROOT）解析
           })
         }

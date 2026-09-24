@@ -26,8 +26,28 @@ import { fileURLToPath } from 'node:url';
  *   本文件在 <skill>/experiments/lab/ ⇒ skill 根 = 上两级。
  *   ⚠ 「脑子B」的审计点名过：**修法本身也必须可公开** —— 只改 LAB_ROOT 不够，
  *     否则 L8 会去读作者私有账本、在公开用户那里必然"INCIDENTS.jsonl 不存在"。
+ *
+ * ★★ **2026-09-23 修一个名不副实的坑**（I51 的隐患还在）：
+ *   下面这个常量**名字叫 SKILL_ROOT，算出来的却是"lab 住的那棵树"** ——
+ *   · 在**公开安装**里，lab 住在 `<skill>/experiments/lab` ⇒ 上两级 = skill 根 ✓ 正确；
+ *   · 在**作者仓库工作副本**里，lab 住在 `<repo>/experiments/lab` ⇒ 上两级 = **仓库根** ✗，
+ *     于是 lab 测的是 **repo 份**（而 DSH 加载的是 skill 份）—— 正是 I51：**分叉时 lab 测旧代码**。
+ *   ⇒ 现在显式解析：**优先用 DSH 真正加载的那份**（`$DSH_HOME/skills/task-warden/`），
+ *     只有它不存在时才退回"lab 住的那棵树"（公开安装 / 干净机器就走这条）。
+ *     `export const SKILL_ROOT` 也一并导出，方便用例断言"到底测的是哪一份"。
  */
-const SKILL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+function resolveSkillRoot() {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const localTree = path.resolve(here, '..', '..')
+  try {
+    const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+    const installed = path.join(home, 'skills', 'task-warden')
+    if (fs.existsSync(path.join(installed, 'warden.mjs'))) return installed
+  } catch (e) { /* 拿不到 DSH_HOME 就退回本地那棵树 */ }
+  return localTree
+}
+export const SKILL_ROOT = resolveSkillRoot()
+export const LOCAL_TREE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 export const LAB_ROOT = process.env.WARDEN_LAB_ROOT || path.join(os.tmpdir(), 'warden-lab')
 export const WARDEN = path.join(SKILL_ROOT, 'warden.mjs')
 export const SELFTEST = path.join(SKILL_ROOT, 'selftest.mjs')

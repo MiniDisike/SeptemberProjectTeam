@@ -1,6 +1,6 @@
 {
   "name": "SeptemberProjectTeam / task-warden (public edition)",
-  "date": "2026-09-23",
+  "date": "2026-09-24",
   "note": "Public edition. Machine-specific paths and the author's verbatim quotes are redacted; all paths are derived at runtime. Hashes are computed over LF-normalized text. Regenerate with the private publish/make-public.mjs, which also re-runs the leak scan.",
   "files": [
     {
@@ -104,9 +104,89 @@
       "sha256": "35d0f8a35f1ebe7bcca800d373eab561b9336e8e35ee1d771ccb9473152592d1"
     },
     {
+      "rel": "01-skill/experiments/lab/L21_preset_default_guard.mjs",
+      "size": 8669,
+      "sha256": "261e145992c6647dc5d1af9b0e4517df86f9a3d8d52342960c6e891970094053"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L22_plan_gate.mjs",
+      "size": 8400,
+      "sha256": "71215a42aae96abb82d5ea954ca8c5e8663def461531d83ef3d69d930e3bd254"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L23_roles_criteria.mjs",
+      "size": 7838,
+      "sha256": "51fde574084334aa1df2d526f173575c71b9935df76588fc11511eac729e3362"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L24_duty_loop.mjs",
+      "size": 7540,
+      "sha256": "84ed8c6c36b640933e7701b41722b9cdc0c984e7b1a421a71446e88a99ec0611"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L25_copy_sync.mjs",
+      "size": 8207,
+      "sha256": "3d2949fab61fab2cfd1bdf9335cbc421f7f88569bfb419a4038af103a94096cb"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L26_corpus_text.mjs",
+      "size": 4904,
+      "sha256": "f9dea97356a6abd2a16dc76d2298e42050fd672b582052d19d2204206bc1c57c"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L27_finding_isomorphism.mjs",
+      "size": 5729,
+      "sha256": "b703d3820131423bbe6ce3ac3199de5ceafae29e45d536d3bb0005bd70abad79"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L28_no_fake_decision.mjs",
+      "size": 4168,
+      "sha256": "5499d21adeb53625532f4a7260bb80bf32ac0341172019be5b2c6fbc6d044a8c"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L29_feed_freshness.mjs",
+      "size": 6692,
+      "sha256": "dc380b04d97e206e7d18f8d88f671370cdd695fd9f0dd135ec399135b57a083f"
+    },
+    {
       "rel": "01-skill/experiments/lab/L2_half_done.mjs",
       "size": 4782,
       "sha256": "48d0a956a1dd30006a15d3855172e72581975cd379c33941fa0a68c215fb872e"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L30_negation_matcher.mjs",
+      "size": 8368,
+      "sha256": "f4e439ca65a119476ce6d965d2c9ee74b52ddb86217b94b49e1ac361f42cd8fc"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L31_evidence_after_mtime.mjs",
+      "size": 6047,
+      "sha256": "4d4128604a2a7cc564f027e764ab8febb05d1472b5c5eb4d4c62e4cf104df2ea"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L32_delegation.mjs",
+      "size": 3985,
+      "sha256": "40892a6190a88c70e6cce411dd12ccb545e2be9a25c7b6180a53e09bf7c085e8"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L33_recon_enforced.mjs",
+      "size": 4873,
+      "sha256": "0532eceff675955c204e55933fb21a0cd0636e3e01e92a00e6ef025e728691fb"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L34_mustnot_addressed.mjs",
+      "size": 5843,
+      "sha256": "e74243ede24ad49ed7699c4202deb3e56a0c66c78b7e7ae3255007514f3c9fee"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L35_steer_criterion.mjs",
+      "size": 6350,
+      "sha256": "b28294e0df18c56a053521111aca8a61348210811ae23d7af8cb93446ca02104"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L36_steer_mode.mjs",
+      "size": 4506,
+      "sha256": "e5baf35f80dbb3310fd104fc0b61190612774a3634a0738b5895dcd4c491cca4"
     },
     {
       "rel": "01-skill/experiments/lab/L3_isolation.mjs",
@@ -150,13 +230,13 @@
     },
     {
       "rel": "01-skill/experiments/lab/common.mjs",
-      "size": 16911,
-      "sha256": "46479558a8d3b1eb011faa00cb544b92b334aff20b15265a2b96c50ec5df7af4"
+      "size": 18268,
+      "sha256": "5677b51c2d25ffb59e5bbf35b9601ecaa5d57d332b61a6c55442a21a57bfdefe"
     },
     {
       "rel": "01-skill/experiments/lab/run-all.mjs",
-      "size": 4992,
-      "sha256": "371e14a1f60c3df96242dc8f85f7925af5ae0858eec461606feb848fe6c79ac6"
+      "size": 5375,
+      "sha256": "0663b7f06cabb804f2769032b7c58fb40e7acd8ab9d16cbccddbe1e797894388"
     },
     {
       "rel": "01-skill/selftest.mjs",
@@ -190,8 +270,8 @@
     },
     {
       "rel": "02-preset-roles/team-guard.mjs",
-      "size": 32752,
-      "sha256": "202ea14e0f97ae6893553038665fac897ccae5e14fe26b6388502416dbbaa05b"
+      "size": 38233,
+      "sha256": "6e6b41d618443cc1db4fd0b33142248fe3d038ababc8728d4be0ee3e64f098b3"
     },
     {
       "rel": "02-preset-roles/team-guard.selftest.mjs",
@@ -215,8 +295,8 @@
     },
     {
       "rel": "03-host-plugin/plugin-io.js",
-      "size": 35034,
-      "sha256": "725954d3b5c45b075f53bbf68391ffd768796de2a7250fc177c3f802a2d2b873"
+      "size": 36768,
+      "sha256": "5520e173d853bf2e5e7f69d43e99efdc33fbcb184d50a2eb35d1608888617ed6"
     },
     {
       "rel": "03-host-plugin/preset-default-guard.mjs",
@@ -225,8 +305,8 @@
     },
     {
       "rel": "03-host-plugin/warden-watch.js",
-      "size": 30239,
-      "sha256": "6260117de74f39fa094c28ea1287faf854b5ce3e4a84f03b514a88b3bc678fa9"
+      "size": 32018,
+      "sha256": "264837447e3d369777c4df71f1b8f85b490a3a77e90a45963689b99df1dac730"
     },
     {
       "rel": "04-config/cordis.patch.yml",
