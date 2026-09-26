@@ -37,3 +37,5 @@ HANDOFF.md
 
 # 插件运行时写出来的探针/状态文件（不是包内容）
 context-dedup.status.json
+/交接.md
+/交接-*.md
