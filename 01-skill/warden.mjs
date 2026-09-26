@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { decodeSession, listSessions, summarize, currentSessionId, sessionsRoot, workspaceDirOfSession, encodeWorkspace, fmtInt, fmtDur } from './bill.mjs';
 
 export const WARDEN_DIR = '.warden';
@@ -651,23 +652,59 @@ function dig(o, dotted) {
 let _corpusEntries = null;
 let _corpusKey = null;
 /**
+ * 「这次到底扫了几个窗口」—— R37 要求**输出里明写**。
+ * 为什么单独留一份旁路统计：`corpusEntries` 的返回类型是数组，好几个调用方按数组用，
+ * 不能为了报个数就改返回形状（那会去动完好的功能）。
+ */
+let _corpusStats = {
+  mode: 'all', scoped: false, session: null,
+  windows: 0, sessionsSeen: 0, skippedOtherWindows: 0, subagentSessions: 0, noDiskWindows: 0,
+};
+export const corpusScanStats = () => ({ ..._corpusStats });
+
+/**
  * 只收**真用户**消息。实测 DSH 把系统注入也记成 user/message，靠 data.source.kind 区分：
  *   user(129) / plugin(68) / agent-instructions(19) / subagent-settled(9) / agent-message(6) / goal(2) / skill-catalog(1)
  * 不筛的话，AI 把自己写的东西塞进 agent-message 就能冒充"用户原话"。
  * 保留 time/seq —— 校验"用户批准偏差"时必须能判断这句话是不是发生在交付替代品**之后**。
+ *
+ * ★ R37：`session` 给了就**只扫那一个窗口**；`allWindows` 才扫全集。
+ *   **默认（什么都不给）保持全集** —— `check` 走这条默认路，它拿 SPEC 里的引文逐字核对，
+ *   而 SPEC 的引文本就来自**多个窗口**；把 check 也收窄会把合法的跨窗口引文全判成
+ *   "查无实据" ⇒ 那是**改坏完好的功能**（L42 ⑧ 钉着这一条）。
  */
-export function corpusEntries(root, { force } = {}) {
+export function corpusEntries(root, { force, session, allWindows } = {}) {
   // 到哪里去找"用户原话"：
   //  ① .warden/config.json 里点名的工作区（需要跨会话/跨窗口核对时用）
   //  ② 认「当前会话实际落在哪个工作区目录」—— 工程在子目录、.git 在子目录里是常态
   //  ③ 退回按工程根编码
   const dirNames = quoteDirNames(root);
-  const key = dirNames.join('|');
+  const want = allWindows ? null : (String(session ?? '').trim() || null);
+  const key = `${want ?? '*'}|${dirNames.join('|')}`;
   if (_corpusEntries && !force && _corpusKey === key) return _corpusEntries;
   const out = [];
+  /**
+   * ★ 「几个窗口」的口径：**只有 `session-<uuid>` 才是用户的窗口**，裸 uuid 是**子代理会话**
+   *   （它第一条"用户消息"其实是父代理派发的提示词）。口径必须与 `voices` 一致 ——
+   *   两个命令各说各话等于没报。
+   *   ⚠ 这里**只改计数口径，不改收哪些消息** —— 收消息的规则属于 `check` 的判定。
+   */
+  const seenWindows = new Set();
+  const noDiskWindows = new Set();
+  let subagentSessions = 0;
+  let sessionsSeen = 0; let skippedOtherWindows = 0;
   for (const s of listSessions({ dirName: dirNames })) {
+    sessionsSeen += 1;
+    /**
+     * ★ 子代理会话**先判**（原来"窗口过滤"排在它前面 ⇒ scoped 时子代理被当成"别的窗口"
+     *   提前 skip，`子代理会话 N 个` 就**永远是 0**，与同一行"共见到 S 个会话"自相矛盾）。
+     *   ⚠ 仍然**只计数、不 `continue`**：收不收这些消息属于 `check` 的判定，动它会改坏完好的功能。
+     */
+    if (!s.sessionId.startsWith('session-')) subagentSessions += 1;
+    if (want && s.sessionId !== want) { skippedOtherWindows += 1; continue; }
     try {
       const { events } = decodeSession(s.file);
+      const wroteDisk = sessionWroteDisk(events);
       for (const e of events) {
         if (e.type !== 'user/message') continue;
         if (e.data?.source?.kind !== 'user') continue;
@@ -691,11 +728,22 @@ export function corpusEntries(root, { force } = {}) {
         const text = Array.isArray(c) ? c.filter((b) => b && typeof b.text === 'string').map((b) => b.text).join('\n') : '';
         if (!text) continue;
         out.push({ text, raw: JSON.stringify(e), time: e.time ?? null, seq: e.seq ?? null, session: s.sessionId });
+        // 只有**真的贡献了原话**的主窗口才算进"扫了几个窗口"（空窗口不算查过）
+        if (s.sessionId.startsWith('session-')) {
+          seenWindows.add(s.sessionId);
+          if (!wroteDisk) noDiskWindows.add(s.sessionId);
+        }
       }
     } catch { /* 单文件失败不影响整体 */ }
   }
   _corpusEntries = out.sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   _corpusKey = key;
+  _corpusStats = {
+    mode: want ? (String(session ?? '').trim() ? 'session' : 'mine') : 'all',
+    scoped: !!want, session: want,
+    windows: seenWindows.size, sessionsSeen, skippedOtherWindows, subagentSessions,
+    noDiskWindows: noDiskWindows.size,
+  };
   return _corpusEntries;
 }
 
@@ -708,6 +756,286 @@ export function quoteDirNames(root) {
   }
   const auto = workspaceDirOfSession(currentSessionId());
   return [auto ?? encodeWorkspace(root)];
+}
+
+// ================================================== 窗口隔离 + 总账本（R37）
+/**
+ * ★ **每个窗口有自己单独负责的一本账**（用户 2026-09-24 逐字）：「（用户原话已隐去 —— 公开版不留逐字）」
+ *
+ * **污染是双向实测的**，不是"我这边脏了"：
+ *   · 本窗口实测：`voices` 报「已认领 191 / 共 389 · 未认领 198」—— 那 198 条里大部分不是这个窗口说的，
+ *     因为扫描扫的是 **DSH 会话日志全集**，而所有窗口的日志在同一个 `~/.dsh/sessions/` 下；
+ *   · 反向：`quoteWorkspaces` 点名一个装着好几个工程的目录，等于把**同目录下所有工程的所有窗口**
+ *     混成一本账（隔壁工程的截图逐字写着「30 条待认领（其中 28 条是隔壁插件的窗口留在同一本账里的）」）。
+ *
+ * 所以取数规则：**默认只扫本窗口**；扫全集必须**显式**（`--all-windows` / `--session <id>`），
+ * 而且输出里**必须明写扫了几个窗口** —— 没写出来，就等于没查。
+ * ⚠ **不是**把"扫全集"删掉（那会毁掉跨窗口核对）：`--all-windows` 就是那条显式的路。
+ */
+export function resolveWindowScope(root, { session, allWindows } = {}) {
+  const explicit = String(session ?? '').trim();
+  if (allWindows) return { mode: 'all', scoped: false, session: null, why: '--all-windows（显式扫全集）' };
+  if (explicit) return { mode: 'session', scoped: true, session: explicit, why: `--session ${explicit}（显式指定窗口）` };
+  const env = String(currentSessionId() ?? '').trim();
+  // 主窗口 id 形如 `session-<uuid>`；**子代理会话是裸 uuid** —— 它没有"用户在这个窗口说过的话"。
+  if (env && env.startsWith('session-')) return { mode: 'mine', scoped: true, session: env, why: 'DSH_SESSION_ID（本窗口）' };
+  return {
+    mode: 'unknown', scoped: false, session: null,
+    why: env ? `DSH_SESSION_ID=${env} 不是主窗口 id（子代理会话没有自己的用户原话账）` : '环境里没有 DSH_SESSION_ID',
+  };
+}
+
+/**
+ * 认不出本窗口时**一律拒收**（exit 2），不替你猜。
+ * 为什么：静默按全集扫**就是**这次要修的污染本身；而"0 条"被读成"没问题"是最坏的一类假通过。
+ */
+export function unknownWindowNotice(scope, cmd) {
+  return [
+    `[拒收] 认不出「本窗口」是哪一本账 —— ${scope.why}。`,
+    '  **不替你猜**：静默按全集扫，就是这次要修的污染本身。',
+    '  两条明确的出路（选一条）：',
+    `    · 只扫本窗口：  node warden.mjs ${cmd} --session <本窗口会话id>`,
+    `    · 扫全集：      node warden.mjs ${cmd} --all-windows`,
+  ].join('\n');
+}
+
+/** 本窗口自己的那本原话账：`.warden/voices/<会话id>.jsonl` —— 「各自窗口先写入单独的」 */
+export function voiceFileFor(dir, session) {
+  return path.join(dir, 'voices', `${String(session).replace(/[^\w.-]/g, '_')}.jsonl`);
+}
+
+/**
+ * 取**位置参数**（关键词 / 文件路径）：跳过 `--flag`，并把带值 flag 的**值**也跳掉。
+ *
+ * ⚠ 实测踩过：`voices --session session-BBBB` 里，`session-BBBB` 会被
+ *   `filter(a => !a.startsWith('--'))` 当成**关键词**去查 —— "显式指定了一个窗口"变成
+ *   "查一个叫 session-BBBB 的词"，返回 0 条还报得理直气壮。这类洞一旦发生就是**静默查错东西**。
+ */
+export function positionalArgs(argv, valueFlags = []) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = String(argv[i]);
+    if (a.startsWith('--')) { if (valueFlags.includes(a)) i += 1; continue; }
+    out.push(a);
+  }
+  return out;
+}
+
+/**
+ * `QUESTIONS.jsonl` 里**最近一条还没判决的问题** —— 硬伤 D 的判据 ②。
+ *
+ * 硬伤 D 的事故原样：`ask --verdict decide --reason "我决定这么做"`
+ *   → 落盘 `{"resolved":"decide","reason":"我决定这么做","question":""}`。
+ * `question` 从**脏值**变成**空串**，而空串**不是修复** —— 它变成"静默的空输入 + exit 0"，
+ * 判决记录**无法与任何问题对上**（既不能复核、也不能推翻）。
+ * ⇒ 判决必须能对上**一个具体问题**：命令行给了就用它；没给就从这里取一条**明说取自哪里**；
+ *   两处都没有 ⇒ **拒收 exit 2，一个字节都不写**。
+ */
+export function lastPendingQuestion(file) {
+  if (!fs.existsSync(file)) return null;
+  const lines = readText(file).split(/\r?\n/).filter((l) => l.trim().startsWith('{'));
+  const judged = new Set();
+  for (const l of lines) {
+    let o = null; try { o = JSON.parse(l); } catch { continue; }
+    if (o && o.resolved && o.question) judged.add(String(o.question));
+  }
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let o = null; try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (!o || !o.question) continue;      // 空 question 的坏记录**不算**一条待决问题
+    if (o.resolved) continue;             // 已经判决过的
+    if (judged.has(String(o.question))) continue;   // 同一个问题已经判过了
+    return { question: String(o.question), at: o.at ?? null };
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ 总账本
+/**
+ * 跨窗口的那一本：`.warden/LEDGER.jsonl`（**未做完项的汇总 + 各窗口完成状态**）。只增不改。
+ *
+ * 逐字对得上：
+ *   · 「但也有一个总账本」     → 全工程一本，所有窗口读得到；
+ *   · 「各自窗口先写入单独的」 → 原话先落 `.warden/voices/<窗口>.jsonl`（见 syncVoices）；
+ *   · 「做完后就标记做完」     → `ledger done --req R#` 写一笔 `status:"done"`，带**窗口 id + 时间**；
+ *   · 「未做完的写入总账本」   → `ledger flush` / 收尾 `results` 自动落这一笔
+ *                              （**不做完就静默消失 = 事故**，所以这一笔是强制的）；
+ *   · 「总账每条可辨出处」     → 每条**必有** `window` + `projectRoot` + `at`。
+ */
+const LEDGER_FILE = 'LEDGER.jsonl';
+
+/**
+ * 账本标识：`<工程目录名>-<工程根 sha256 前 6 位>`。
+ * ★ **R# 不跨账**：需求号只在**它自己那本账**里有效。跨账引用**必须**写成 `<账本id>#R37`
+ *   （同号不同物是"静默错认"的温床）。标识由**工程根绝对路径**派生（大小写不敏感）
+ *   ⇒ 同一工程的所有窗口算出同一个标识，隔壁工程算出不同的 ⇒ 天然分账。
+ */
+export function ledgerIdOf(root) {
+  const abs = path.resolve(root);
+  const base = (path.basename(abs) || 'root').replace(/[^\w.-]/g, '_');
+  const h = crypto.createHash('sha256').update(abs.toLowerCase()).digest('hex').slice(0, 6);
+  return `${base}-${h}`;
+}
+
+/** `R37` → 本账；`<账本id>#R37` → 指定账；其它 → null（拒收，不许瞎认） */
+export function parseLedgerReq(s) {
+  const t = String(s ?? '').trim();
+  const m = /^(.+?)#(R\d+)$/.exec(t);
+  if (m) return { ledger: m[1].trim(), req: m[2] };
+  if (/^R\d+$/.test(t)) return { ledger: null, req: t };
+  return null;
+}
+
+/**
+ * 读总账本：合法行与**坏行**分开返回。
+ * 坏行不许静默吞掉 —— 吞掉会让"未做完"**少算**，而少算正是"不做完就静默消失"那口井。
+ */
+export function readLedger(dir) {
+  const p = path.join(dir, LEDGER_FILE);
+  const entries = []; const bad = [];
+  if (!fs.existsSync(p)) return { entries, bad, file: p };
+  readText(p).split(/\r?\n/).forEach((l, i) => {
+    const s = l.trim();
+    if (!s || s.startsWith('#')) return;
+    let o; try { o = JSON.parse(s); } catch { bad.push({ n: i + 1, why: '不是合法 JSON' }); return; }
+    if (!o || typeof o !== 'object') { bad.push({ n: i + 1, why: '不是一个 JSON 对象' }); return; }
+    if (!o.ledger) { bad.push({ n: i + 1, why: '缺 ledger（账本标识）—— 看不出这个 R# 属于哪本账' }); return; }
+    if (!/^R\d+$/.test(String(o.req ?? ''))) { bad.push({ n: i + 1, why: `req「${o.req}」不是裸 R#（跨账要在 ledger 字段里分开写）` }); return; }
+    if (!o.window) { bad.push({ n: i + 1, why: '缺 window（窗口/会话 id）—— 看不出是谁写的' }); return; }
+    if (!o.projectRoot) { bad.push({ n: i + 1, why: '缺 projectRoot（工程根）—— 看不出是哪本账' }); return; }
+    if (!o.at) { bad.push({ n: i + 1, why: '缺 at（时间）' }); return; }
+    if (!['open', 'done', 'reopen'].includes(String(o.status))) { bad.push({ n: i + 1, why: `status「${o.status}」不认识（只能是 open / done / reopen）` }); return; }
+    entries.push(o);
+  });
+  return { entries, bad, file: p };
+}
+
+export function appendLedger(dir, rec) {
+  fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, LEDGER_FILE);
+  fs.appendFileSync(p, JSON.stringify(rec) + '\n', 'utf8');
+  return p;
+}
+
+/**
+ * 归并总账：key = `账本|R#`。
+ *
+ * ★ **`done` 是"粘"的 —— 不许被后来的 `open` 悄悄盖回去。**
+ *   场景：窗口 A 做完 R37、标了 done；窗口 B 收尾时把 R37 当成"自己还没做完"、又写了一笔 open。
+ *   若按"后写为准"，那条 done 就被抹掉了 ⇒ **别的窗口会以为这件还没做**，
+ *   而这正是用户要的那件事（「做完后就标记做完」）当场失效。
+ *   所以：done 一旦立住，后来的 open **不改状态**，只记进 `postDoneOpen` **明着报出来**。
+ *   真要重开，得显式 `ledger reopen --req R#`（把话说清楚，而不是靠一次手滑的 flush）。
+ */
+export function ledgerState(dir) {
+  const { entries, bad, file } = readLedger(dir);
+  const byKey = new Map();
+  for (const e of entries) {
+    const k = `${e.ledger}|${e.req}`;
+    let it = byKey.get(k);
+    if (!it) {
+      it = {
+        ledger: e.ledger, req: e.req, status: 'open', title: '', note: '',
+        window: e.window, projectRoot: e.projectRoot, at: e.at, n: 0,
+        doneAt: null, doneBy: null, reopenedAt: null, reopenedBy: null,
+        windows: [], postDoneOpen: [],
+      };
+      byKey.set(k, it);
+    }
+    it.n += 1;
+    if (!it.windows.includes(String(e.window))) it.windows.push(String(e.window));
+    it.at = e.at; it.window = e.window;
+    if (e.title) it.title = e.title;
+    if (e.note) it.note = e.note;
+    const isDone = String(e.status) === 'done';
+    const isReopen = String(e.status) === 'reopen';
+    if (isDone) {
+      it.status = 'done';
+      if (!it.doneAt || String(e.at) >= String(it.doneAt)) { it.doneAt = e.at; it.doneBy = e.window; }
+    } else if (isReopen) {
+      // 显式重开：只有这一条能把 done 打回 open（不许靠一次手滑的 flush 达成）
+      it.status = 'open';
+      it.reopenedAt = e.at; it.reopenedBy = e.window;
+    } else if (it.status === 'done') {
+      it.postDoneOpen.push({ at: e.at, window: e.window, note: e.note ?? '' });
+    }
+  }
+  const items = [...byKey.values()].sort((a, b) => `${a.ledger}|${a.req}`.localeCompare(`${b.ledger}|${b.req}`));
+  return { items, entries, bad, file };
+}
+
+/**
+ * 本窗口**还没做完**的项 —— 收尾必须写进总账的东西。
+ * 两个来源（先总账、后开工清单）：
+ *   ① 总账里本账本 + 本窗口、状态不是 done 的项（"做完就标记做完"没做，就得一直挂着）；
+ *   ② 退路：本窗口还没往总账写过东西时，用 `RECON.jsonl` 里本窗口最后一次 `needs` 的 `planned`
+ *      —— 否则一个新窗口收尾时会"什么都没写"（= 不做完就静默消失）。
+ */
+export function unfinishedForWindow(dir, session, root, ledgerId) {
+  const st = ledgerState(dir);
+  // ⚠ 用 `windows.includes` 而不是 `window ===`：后者是"最后一次动它的人"，
+  //   会把"本窗口也开过这一项"漏掉（那正是"未做完就静默消失"的入口）。
+  const out = st.items
+    .filter((x) => x.ledger === ledgerId && x.windows.includes(String(session)) && String(x.status) !== 'done')
+    .map((x) => ({ req: x.req, title: x.title ?? '', why: '总账里还没被标记做完' }));
+  if (out.length) return out;
+  try {
+    const rp = path.join(dir, RECON_FILE);
+    if (fs.existsSync(rp)) {
+      let planned = null;
+      for (const line of readText(rp).split(/\r?\n/)) {
+        const s = line.trim(); if (!s.startsWith('{')) continue;
+        let o = null; try { o = JSON.parse(s); } catch { continue; }
+        if (o && o.kind === 'needs' && String(o.session ?? '') === String(session)) planned = o;
+      }
+      if (planned && Array.isArray(planned.planned) && planned.planned.length) {
+        const lastByReq = new Map();
+        for (const r of readRounds(dir)) {
+          const id = String(r.requirement ?? ''); if (!id) continue;
+          const cur = lastByReq.get(id);
+          if (!cur || Number(r.round ?? 0) >= Number(cur.round ?? 0)) lastByReq.set(id, r);
+        }
+        /**
+         * ★★ **总账里已经 done 的项，绝不许再从"开工清单"这条路被重新写回 open。**
+         *
+         * 实测（P-M19 自己的证据脚本 `r37_musts.mjs` 的 ③-2 抓到的）：
+         *   `ledger done --req R1` 之后再跑一次 `results`，它会**又**写一笔 `open` ——
+         *   因为这条退路只看"最新一轮的 ROUNDS 状态"，而账本里那条 done 它**没看**。
+         *   后果正对着用户那句话（「**做完后就标记做完**…不许留着让别的窗口重复做」）：
+         *   别的窗口收尾时会把一件**已经做完**的事重新报成"未做完"。
+         *   ⚠ `ledgerState` 那边 done 仍然是"粘"的（不会被 open 盖回去），
+         *     所以这不是数据被抹掉，而是**账本里凭空多出噪音 + 收尾报错数** —— 一样要治。
+         * 判据：`st.items` 里 `账本|R#` 状态为 done ⇒ 跳过。
+         */
+        const doneInLedger = new Set(
+          st.items.filter((x) => x.ledger === ledgerId && String(x.status) === 'done').map((x) => String(x.req)),
+        );
+        for (const id of planned.planned) {
+          if (doneInLedger.has(String(id))) continue;   // ★ 总账说它做完了 ⇒ 不许再报"未做完"
+          const last = lastByReq.get(String(id));
+          if (last && String(last.status) === 'done') continue;
+          out.push({
+            req: String(id), title: '',
+            why: `开工清单（RECON）里要做的，收尾时还没 done（最新第 ${last ? last.round : '—'} 轮 ${last ? last.status : '没有轮次'}）`,
+          });
+        }
+      }
+    }
+  } catch { /* 退路读不动就只用总账里的（不是静默通过：上面若也没有，调用方会明说 0 条） */ }
+  return out;
+}
+
+/** 收尾落账：把本窗口未做完的项写进总账（每项一笔 `open`，带窗口 id / 工程根 / 时间） */
+export function flushWindowToLedger(root, dir, { session, ledgerId, note = '' } = {}) {
+  const items = unfinishedForWindow(dir, session, root, ledgerId);
+  const at = new Date().toISOString();
+  for (const it of items) {
+    appendLedger(dir, {
+      at, ledger: ledgerId, req: it.req, title: it.title,
+      status: 'open', window: session, projectRoot: path.resolve(root),
+      note: note || `收尾写入总账：${it.why}`,
+    });
+  }
+  return { added: items.length, items, at };
 }
 
 export function readConfig(dir) {
@@ -1286,18 +1614,20 @@ export function check(root, { specText, devText, rounds, watches } = {}) {
         + head + (items.length > 3 ? `；…另有 ${items.length - 3} 个产物` : '')
         + '。要重新派脑子：`node warden.mjs brain brief --artifact <产物>`。');
     } else if (single.length) {
-      // ⚠ 用户 2026-09-2x 逐字：「（用户原话已隐去 —— 公开版不留逐字）」
-      //   ⇒ 单审**不再是欠账**，所以这一行不再是"你还差一个"的催促，
-      //     而是"现在是正常的，只有这三种情况才加派"的说明。
-      warns.push(`[脑子] ${single.map((x) => x.artifact).join('、')} 是**单审** —— 这是**默认**（默认就 1 个，不是欠账）。`
-        + `只有三种情况才派第 2 个：${BRAIN_TRIGGER_IDS.join(' / ')}`
+      // ⚠ 用户 2026-09-25 逐字：「（用户原话已隐去 —— 公开版不留逐字）」
+      //   ⇒ 单审**不是默认**，而是按需：只在 conflict / shallow / explore 三种触发条件成立时才派。
+      //   这一行不再是"你还差一个"的催促，而是"审过了，没问题"的确认。
+      warns.push(`[脑子] ${single.map((x) => x.artifact).join('、')} 已审过（单审）。`
+        + `只在 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才加派第 2 个`
         + `（\`brain brief --artifact <产物> --trigger <哪一种>\`）。`);
     } else if (items.length) {
       warns.push(`[脑子] ${items.length} 个产物有复审记录、且审的就是当前版本。`);
     } else {
-      warns.push('[脑子] 台账里**一个产物都没有** —— 脑子从没跑过（或跑了没落账）。'
-        + '要定稿的产物用 `brain brief --artifact <产物>` 起一轮（**默认 1 个**；'
-        + `只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才加派第 2 个）。`);
+      // ★ 默认不审 —— 随手小改动不需要派脑子；只在冲突/不细致/需要探索时才派。
+      //   不再把"没审"当成"需要处理的事"推到 AI 面前。
+      warns.push('[脑子] 没有审查记录 —— 随手小改动不必审；'
+        + `只在 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才派脑子`
+        + `（\`brain brief --artifact <产物> --trigger <哪一种>\`）。`);
     }
   } catch (e) {
     warns.push(`[脑子] ⚠ 脑子台账读不动（这一条不是"没问题"，是"没查成"）：${String(e.message).slice(0, 120)}`);
@@ -1535,9 +1865,20 @@ export function sessionWroteDisk(events) {
  * 只收 `data.source.kind === "user"` 的真用户消息（注入的不算）；
  * 只收**写过磁盘**的会话（纯问答的窗口不归属进来 —— 用户明确要求过）。
  */
-export function syncVoices(root, dir, { rebuild = false } = {}) {
+export function syncVoices(root, dir, { rebuild = false, session, allWindows = false, mergeAggregate = false } = {}) {
+  /**
+   * ★ R37「各自窗口先写入单独的」：给了 `session`（或默认本窗口）时，
+   *   这次同步**只扫那一个窗口**，而且**写进它自己那本** `.warden/voices/<会话id>.jsonl`。
+   *   汇总本 `.warden/VOICE.jsonl` 只在**显式扫全集**（`--all-windows`）时才当目标。
+   *
+   * 为什么必须分文件写（而不是"写同一个文件但只追加本窗口"）：
+   *   ① `--rebuild` 会**先清空**目标文件 —— 若 scoped 也拿汇总本当目标，一次
+   *      `voices --rebuild` 就把别的窗口的原话**全抹掉**（那是不可逆的事故）；
+   *   ② 用户原话是「各自窗口先写入单独的」—— 分文件就是那句话的字面实现。
+   */
+  const want = allWindows ? null : (String(session ?? '').trim() || null);
   const dirNames = quoteDirNames(root);
-  const p = path.join(dir, 'VOICE.jsonl');
+  const p = want ? voiceFileFor(dir, want) : path.join(dir, 'VOICE.jsonl');
   const seen = new Set();
   if (!rebuild && fs.existsSync(p)) {
     for (const l of readText(p).split(/\r?\n/)) {
@@ -1545,12 +1886,34 @@ export function syncVoices(root, dir, { rebuild = false } = {}) {
       try { const o = JSON.parse(l); seen.add(`${o.session}|${String(o.text).slice(0, 60)}`); } catch { /* 坏行 */ }
     }
   }
+  // scoped 时也要并上汇总本里属于本窗口的旧行，否则第一次分账会把老原话当成"新增"再写一遍
+  if (!rebuild && want && fs.existsSync(path.join(dir, 'VOICE.jsonl'))) {
+    for (const l of readText(path.join(dir, 'VOICE.jsonl')).split(/\r?\n/)) {
+      if (!l.trim()) continue;
+      try {
+        const o = JSON.parse(l);
+        if (String(o.session ?? '') !== want) continue;
+        seen.add(`${o.session}|${String(o.text).slice(0, 60)}`);
+      } catch { /* 坏行 */ }
+    }
+  }
   const fresh = [];
-  const skipped = { subagent: 0, noDisk: 0 };
+  const skipped = { subagent: 0, noDisk: 0, otherWindow: 0 };
+  const scanned = new Set();
+  let sessionsSeen = 0;
   for (const s of listSessions({ dirName: dirNames })) {
+    sessionsSeen += 1;
+    /**
+     * ★ 子代理会话**先判**（原来"窗口过滤"排在它前面 ⇒ scoped 时**子代理会话被当成"别的窗口"
+     *   提前 skip**，`跳过：子代理会话 N 个` 就**永远是 0**，与同一行"共见到 M 个会话"自相矛盾）。
+     *   ⚠ 仍然**只计数、不 continue** 到收消息那一步之外：收消息的规则一个字没动。
+     */
     // ① 子代理会话：它第一条"用户消息"是**父代理派发的提示词**，不是用户说的话。
     //    判别：主会话 id 是 `session-<uuid>`，子代理会话是裸 `<uuid>`。
     if (!s.sessionId.startsWith('session-')) { skipped.subagent += 1; continue; }
+    // ★ R37：默认只扫**本窗口**。别的窗口的原话不进这本账。
+    //    两个计数器因此**互不重叠**：子代理只进 subagent，别的窗口只进 otherWindow。
+    if (want && s.sessionId !== want) { skipped.otherWindow += 1; continue; }
     // ② 没写过磁盘的会话：用户说"没有进行记录的就不需要归属进来"（纯问答的窗口）
     const { events } = decodeSession(s.file);
     if (!sessionWroteDisk(events)) { skipped.noDisk += 1; continue; }
@@ -1568,23 +1931,172 @@ export function syncVoices(root, dir, { rebuild = false } = {}) {
       // 老记录**一个字都不动**，读取时缺省当 user（见 voiceIsUser）。
       fresh.push({ session: s.sessionId, seq: n, at: e.time ? new Date(e.time).toISOString() : null, text, wrote: true, kind: 'user' });
     }
+    if (n > 0) scanned.add(s.sessionId);   // 只有**真的有原话**的窗口才算"扫到了"（空窗口不算查过）
   }
   fresh.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  const header = '# 窗口传递层：用户在每个窗口说过的每一句话（逐字，按时间）。只增不改。\n'
-    + '# 只收①主会话（不带 session- 前缀的是子代理会话，不算用户）②写过磁盘的会话（纯问答的窗口不归属进来）。\n';
-  if (rebuild) fs.writeFileSync(p, header + fresh.map((v) => JSON.stringify(v)).join('\n') + (fresh.length ? '\n' : ''), 'utf8');
-  else if (fresh.length) fs.appendFileSync(p, (fs.existsSync(p) ? '' : header) + fresh.map((v) => JSON.stringify(v)).join('\n') + '\n', 'utf8');
-  const total = fs.existsSync(p) ? readText(p).split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).length : 0;
+  const header = want
+    ? `# 本窗口（${want}）的原话账：只有这个窗口的用户消息。逐字，按时间，只增不改。\n`
+      + '# 总账本 / 别的窗口：.warden/LEDGER.jsonl 与 node warden.mjs voices --all-windows。\n'
+    : '# 窗口传递层：用户在每个窗口说过的每一句话（逐字，按时间）。只增不改。\n'
+      + '# ★ R37：这是**汇总本**。默认取数只看本窗口（.warden/voices/<会话id>.jsonl）；\n'
+      + '#   要看这个汇总本必须显式：node warden.mjs voices --all-windows。\n'
+      + '# 只收①主会话（不带 session- 前缀的是子代理会话，不算用户）②写过磁盘的会话（纯问答的窗口不归属进来）。\n';
+  /**
+   * ★★ **「要清成 0 条 ⇒ 拒收」** —— 实测的数据事故（原样）：
+   *   BEFORE: winRows=27  aggRows=42
+   *   --- 把本窗口的会话日志移走（模拟日志被归档 / 轮转 / 删）---
+   *   $ node warden.mjs voices --rebuild
+   *     新增 0 条，**累计 27 条** → …\.warden\voices\session-….jsonl   ← 打印的"累计 27 条"是**假**的
+   *   EXIT=0    AFTER: winRows=0    ← 本窗口那本被清成只剩注释头；再跑普通 voices 也**不会自我修复**
+   *
+   * 病根两处，必须一起治：
+   *   ① `--rebuild` 走的是**无条件** `writeFileSync` —— `fresh` 为空时它照样覆盖，把一本有 27 行的账清成 0 行；
+   *   ② `total` 原来是"本窗口那本 ∪ 汇总本里属于本窗口的行"⇒ **盘上已经 0 条，它却报"累计 27 条"**。
+   *
+   * 判据（两条，缺一不可）：
+   *   · **目标文件只在"新内容非空"或"目标不存在"时才许写**；要清成 0 条 ⇒ **拒收 + 非 0 退出**；
+   *     "会话日志**不可用/被移走**"与"这个窗口**真的**没说过话"**不是一回事** ——
+   *     扫到 0 条**区分不了**这两者时就**不替用户清账**。
+   *   · **"累计 N 条"必须报盘上真实的条数**（`countRows(p)`），不许把汇总本里的行并进来充数。
+   */
+  const countRows = (f) => (fs.existsSync(f)
+    ? readText(f).split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).length
+    : 0);
+  const rowsBefore = countRows(p);
+  if (rebuild && !fresh.length && rowsBefore > 0) {
+    return {
+      file: p, added: 0, total: rowsBefore, skipped, rebuild: true, rowsOnDisk: rowsBefore,
+      scoped: !!want, session: want, mode: want ? (String(session ?? '').trim() ? 'session' : 'mine') : 'all',
+      windowsScanned: scanned.size, sessionsSeen,
+      refused: {
+        kind: 'empty-rebuild',
+        rowsBefore,
+        why: `这次扫到 0 条原话，而目标文件 ${p} 里现在有 ${rowsBefore} 行 —— --rebuild 会把它**清空**`,
+      },
+    };
+  }
+  if (rebuild) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, header + fresh.map((v) => JSON.stringify(v)).join('\n') + (fresh.length ? '\n' : ''), 'utf8');
+  }
+  else if (fresh.length) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.appendFileSync(p, (fs.existsSync(p) ? '' : header) + fresh.map((v) => JSON.stringify(v)).join('\n') + '\n', 'utf8'); }
+  /**
+   * ★「各自窗口先写入单独的」：本窗口那本**必须真的建出来，而且不能是个空壳**。
+   * 若这次没有新增（原话早在汇总本里了）就不建文件 ⇒ 这本账永远是 0 条，
+   * 读的人会以为"这个窗口一句话都没说过" —— 那又是"0 输入当没问题"。
+   * 所以没有文件、**或盘上已经是 0 条**时，把本窗口在汇总本里的原话**落一份到它自己这本**。
+   * ⚠ 后半个条件让**已经被清空过的账能自我修复**（原来只认"文件不存在"，所以永远是 0）。
+   * ⚠ 只在 `mine` 非空时写正文，否则就造出一个"0 条的空壳"（那正是上面那口井）。
+   */
+  if (want && countRows(p) === 0) {
+    const mine = loadVoices(dir, { session: want });
+    if (mine.length) {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, header + mine.map((v) => JSON.stringify(v)).join('\n') + '\n', 'utf8');
+    } else if (!fs.existsSync(p)) {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, header, 'utf8');
+    }
+  }
+  /**
+   * ★★ **汇总本必须跟着更新** —— 硬伤 A / 硬伤 B 的产品侧修法。
+   *
+   * 事故原样（判定性实验）：
+   *   [3] 按新默认只跑 scoped voices  → 本窗口账 rows=1，**汇总本 rows=2（没变）**
+   *   [4] 现在 check 该不该报"水位线之后有 1 条未认领"？→ check exit=1 但只说
+   *       「水位线之前还有 2 条历史原话没认领（只计数、不算失败）」—— **那条新原话它看不见，硬失败不响**；
+   *   [5] 只有 `voices --all-windows` 之后才响。
+   *   [B] check 的提醒「还没有 .warden/VOICE.jsonl —— …跑一下：node warden.mjs voices」
+   *       ⇒ 照它给的那条命令跑一次，**提醒还在**（scoped 不写汇总本）——
+   *       违反它自己引用的「**可修复的才配当提醒**」。
+   *
+   * 根因：`check` 的原话认领闸读的是**汇总本**，而 scoped `voices` 只写各窗口那本
+   *   ⇒ **正常流下闸门静默失效**，还把"水位线之前的历史"当成全部报出来 ——
+   *   这正是本项目最忌的「**0 输入当没问题**」。
+   *
+   * ⚠ **判定逻辑一个字没动**：`check` 的判据仍然是"水位线之后有未认领 ⇒ 硬失败"。
+   *   这里改的是**取数 / 落盘** —— 让汇总本真的有那条原话。
+   * ⚠ **绝不 rebuild 汇总本**：只 `append` + 按 `session|text` 去重。这正是原来
+   *   "scoped 不许写汇总本"那条理由①的正解（怕 `--rebuild` 把别的窗口的原话一次抹掉）：
+   *   **只增不改就永远抹不掉**。理由②（「各自窗口先写入单独的」）仍然成立 ——
+   *   本窗口那本**先写**，而用户同一句话里也说了「**但也有一个总账本**」，汇总本就是那个总账本。
+   *
+   * 谁传这个开关：**只有 `voices` 命令**。`ask` 走同一套 `syncVoices`，但它按设计
+   *   **不写汇总本**（L42 ⑦ 钉着这条）⇒ 默认 false，不许顺手打开。
+   */
+  let aggregate = null;
+  if (want && mergeAggregate) {
+    const aggPath = path.join(dir, 'VOICE.jsonl');
+    const aggHeader = '# 窗口传递层：用户在每个窗口说过的每一句话（逐字，按时间）。只增不改。\n'
+      + '# ★ R37：这是**汇总本**。默认取数只看本窗口（.warden/voices/<会话id>.jsonl）；\n'
+      + '#   要看这个汇总本必须显式：node warden.mjs voices --all-windows。\n'
+      + '# 只收①主会话（不带 session- 前缀的是子代理会话，不算用户）②写过磁盘的会话（纯问答的窗口不归属进来）。\n';
+    const keyOf = (v) => `${v.session}|${String(v.text).slice(0, 60)}`;
+    const have = new Set();
+    if (fs.existsSync(aggPath)) {
+      for (const l of readText(aggPath).split(/\r?\n/)) {
+        if (!l.trim() || l.startsWith('#')) continue;
+        try { have.add(keyOf(JSON.parse(l))); } catch { /* 坏行：不动它，也不因它拒写 */ }
+      }
+    }
+    /**
+     * 并进去的是本窗口**全部**在册原话（本窗口那本 ∪ 汇总本里属于它的行），不只是这次新增的 ——
+     * 这样"汇总本被删过 / 曾经落后"的旧账也能被**一次普通 voices** 修回来。
+     */
+    const mineAll = loadVoices(dir, { session: want });
+    const add = mineAll.filter((v) => !have.has(keyOf(v)));
+    try {
+      if (add.length) {
+        fs.mkdirSync(path.dirname(aggPath), { recursive: true });
+        fs.appendFileSync(aggPath,
+          (fs.existsSync(aggPath) ? '' : aggHeader) + add.map((v) => JSON.stringify(v)).join('\n') + '\n', 'utf8');
+      }
+      // ⚠ 本窗口一条原话都没有、汇总本也不存在时**不建空壳**（那正是"0 输入当没问题"）。
+      aggregate = { file: aggPath, added: add.length, rows: countRows(aggPath), exists: fs.existsSync(aggPath) };
+    } catch (e) {
+      aggregate = { file: aggPath, added: 0, rows: countRows(aggPath), exists: fs.existsSync(aggPath), error: String(e.message) };
+    }
+  }
+  /** ★「累计 N 条」= **盘上真实的条数**（不能用"∪ 汇总本里属于本窗口的行"：那是假数） */
+  const total = countRows(p);
   // 水位线：记下"这次同步时原始日志最新到哪一秒"。
   // 为什么必须有它：VOICE 里最新一条的 `at` 是**用户说话的时间**，不是同步的时间 ——
   // 只拿它跟 .zstd 的 mtime 比，会得出"同步过也还是落后"的假警报（跑完 voices 也消不掉）。
   const after = listSessions({ dirName: dirNames });
   const latestLogMtime = after.reduce((m, s) => (s.mtimeMs > m ? s.mtimeMs : m), 0);
-  try {
-    fs.writeFileSync(path.join(dir, VOICE_SYNC_FILE),
-      JSON.stringify({ at: new Date().toISOString(), latestLogMtime, total, added: fresh.length }, null, 2), 'utf8');
-  } catch { /* 水位线是辅助信息，写不下不该影响同步本身 */ }
-  return { file: p, added: fresh.length, total, skipped, rebuild, latestLogMtime };
+  /**
+   * ★ R37：分账之后**水位线也分账**（「可修复的才配当提醒」）。
+   *   只有一条全局水位线时：scoped 同步只覆盖一个窗口 —— 若还去写全局那条，
+   *   等于拿"我只同步了一个窗口"去证明"汇总本已经同步到位"（**假证据**）；
+   *   若不写，`voices` 又永远消不掉那个提醒（**修不好的假警报**）。
+   *   ⇒ 各窗口写各自的 `voices/<会话id>.sync.json`，全局那条只在扫全集时才动。
+   */
+  const winLatestMtime = (() => {
+    let mx = 0;
+    for (const s of after) if (!want || s.sessionId === want) { if (s.mtimeMs > mx) mx = s.mtimeMs; }
+    return mx;
+  })();
+  const myLogMtime = want ? winLatestMtime : latestLogMtime;
+  if (!want) {
+    try {
+      fs.writeFileSync(path.join(dir, VOICE_SYNC_FILE),
+        JSON.stringify({ at: new Date().toISOString(), latestLogMtime, total, added: fresh.length }, null, 2), 'utf8');
+    } catch { /* 水位线是辅助信息，写不下不该影响同步本身 */ }
+  } else {
+    try {
+      fs.mkdirSync(path.join(dir, 'voices'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'voices', `${want}.sync.json`),
+        JSON.stringify({ at: new Date().toISOString(), session: want, latestLogMtime: winLatestMtime, total, added: fresh.length }, null, 2), 'utf8');
+    } catch { /* 同上 */ }
+  }
+  return {
+    file: p, added: fresh.length, total, rowsOnDisk: total, skipped, rebuild, latestLogMtime: myLogMtime,
+    scoped: !!want, session: want, mode: want ? (String(session ?? '').trim() ? 'session' : 'mine') : 'all',
+    // 「扫了几个窗口」—— 输出里必须明写这个数（R37）
+    windowsScanned: scanned.size, sessionsSeen,
+    // 硬伤 A/B：这次把本窗口的原话并进汇总本了吗（`null` = 这次没走合并那条路）
+    aggregate,
+  };
 }
 
 const VOICE_SYNC_FILE = 'VOICE.sync.json';
@@ -1615,12 +2127,55 @@ export function voiceStaleness(root, dir, { graceMs = VOICE_STALE_GRACE_MS } = {
   let sync = null;
   try { sync = JSON.parse(readText(path.join(dir, VOICE_SYNC_FILE))); } catch { sync = null; }
   const watermarkMs = Number(sync?.latestLogMtime ?? 0) || 0;
-  const baselineMs = Math.max(latestVoiceMs, watermarkMs);
+  /**
+   * ★ R37：分账之后，"同步到哪了"要**按窗口各算** —— 否则 scoped 同步永远消不掉这个警报
+   *   （判据是「**可修复的才配当提醒**」）。
+   *
+   * 一个窗口的 baseline = max(
+   *   ① 全局水位线 `VOICE.sync.json` —— 扫全集那次**确实**覆盖了每个窗口；
+   *   ② 它自己的水位线 `.warden/voices/<会话id>.sync.json` —— scoped 同步只覆盖它自己；
+   *   ③ 它在册原话里最新一条的 `at`）
+   * 它落后 = **它自己的**会话日志 mtime 比 baseline 还新（超过 grace）。
+   * 任何一个窗口落后 ⇒ 整体报 stale（`worstWindow` 指出是哪个）。
+   * 没有任何窗口信息时（还没分过账）退回老口径，行为与以前一致。
+   */
+  const perWindowLog = new Map();
+  for (const s of sessions) {
+    const cur = perWindowLog.get(s.sessionId) ?? 0;
+    if (s.mtimeMs > cur) perWindowLog.set(s.sessionId, s.mtimeMs);
+  }
+  const perWindowMark = new Map();
+  try {
+    for (const f of fs.readdirSync(path.join(dir, 'voices'))) {
+      if (!f.endsWith('.sync.json')) continue;
+      try {
+        const o = JSON.parse(readText(path.join(dir, 'voices', f)));
+        const sid = String(o?.session ?? f.slice(0, -'.sync.json'.length));
+        perWindowMark.set(sid, Number(o?.latestLogMtime ?? 0) || 0);
+      } catch { /* 坏水位线 = 没有水位线 */ }
+    }
+  } catch { /* 还没有 voices/ 目录 = 一个窗口都还没分过账 */ }
+  const perWindowVoiceAt = new Map();
+  for (const v of voices) {
+    const sid = String(v.session ?? '');
+    if (!sid) continue;
+    const t = Date.parse(v.at ?? '');
+    if (Number.isFinite(t)) perWindowVoiceAt.set(sid, Math.max(perWindowVoiceAt.get(sid) ?? 0, t));
+  }
+  let behindMs = latestLogMs - Math.max(latestVoiceMs, watermarkMs);   // 没有窗口信息时的老口径
+  let worstWindow = null;
+  let windowBehindMs = -Infinity;
+  for (const sid of new Set([...perWindowLog.keys(), ...perWindowVoiceAt.keys()])) {
+    const logMs = perWindowLog.get(sid);
+    if (!logMs) continue;   // 只在册原话、原始日志已经不在的窗口：没法比，不瞎判
+    const b = logMs - Math.max(watermarkMs, perWindowMark.get(sid) ?? 0, perWindowVoiceAt.get(sid) ?? 0);
+    if (b > windowBehindMs) { windowBehindMs = b; worstWindow = sid; }
+  }
+  if (Number.isFinite(windowBehindMs)) behindMs = windowBehindMs;
   const missing = !fs.existsSync(voicePath);
-  const behindMs = latestLogMs - baselineMs;
   return {
     missing, stale: !missing && latestLogMs > 0 && behindMs > graceMs,
-    latestVoiceMs, latestLogMs, watermarkMs, behindMs, graceMs,
+    latestVoiceMs, latestLogMs, watermarkMs, behindMs, graceMs, worstWindow,
     count: voices.length, sessions: sessions.length,
   };
 }
@@ -1632,15 +2187,35 @@ export function voiceStaleWarning(st) {
   return `⚠ VOICE 快照落后于原始日志（VOICE 最新 ${fmtWall(st.latestVoiceMs)} / 会话日志最新 ${fmtWall(st.latestLogMs)}，差 ${fmtDur(st.behindMs)}）—— 归属核查不可信，先跑：node warden.mjs voices`;
 }
 
-export function loadVoices(dir) {
+/**
+ * 读窗口传递层。
+ * · **不给 `session`**（老行为，不动）：读汇总本 `.warden/VOICE.jsonl` —— `check` 的 VOICE 体检、
+ *   `roles`、`brief` 的"其它窗口"都走这条，改它会把完好的功能改坏。
+ * · **给了 `session`**（R37）：只读**本窗口那一本** —— 先读窗口自己的 `.warden/voices/<id>.jsonl`，
+ *   再并上汇总本里属于本窗口的行（旧数据还没分账时，这一步保证"立刻就能只扫本窗口"），
+ *   最后按 `session#seq` 去重。别的窗口的行**一条都不进来**。
+ *   ⚠ 这一步就是硬伤 A 里说的「**汇总本 ∪ 各窗口本**」的并集口径 —— 少了它，
+ *     "汇总本里那条本窗口的原话"会被 scoped 视图当成不存在。
+ */
+export function loadVoices(dir, { session } = {}) {
+  const want = String(session ?? '').trim();
+  const read1 = (p) => {
+    if (!fs.existsSync(p)) return [];
+    const out = [];
+    for (const l of readText(p).split(/\r?\n/)) {
+      if (!l.trim() || l.startsWith('#')) continue;
+      try { out.push(JSON.parse(l)); } catch { /* 坏行 */ }
+    }
+    return out;
+  };
   const p = path.join(dir, 'VOICE.jsonl');
-  if (!fs.existsSync(p)) return [];
-  const out = [];
-  for (const l of readText(p).split(/\r?\n/)) {
-    if (!l.trim() || l.startsWith('#')) continue;
-    try { out.push(JSON.parse(l)); } catch { /* 坏行 */ }
-  }
-  return out;
+  if (!want) return read1(p);
+  const rows = [...read1(voiceFileFor(dir, want)), ...read1(p).filter((v) => String(v?.session ?? '') === want)];
+  const seen = new Set();
+  return rows.filter((v) => {
+    const k = voiceKey(v);
+    return seen.has(k) ? false : (seen.add(k), true);
+  });
 }
 
 // ------------------------------------------------------------------ 原话认领（事故 I26：VOICE ↔ SPEC 之间那条**不存在的连线**）
@@ -1968,8 +2543,17 @@ function writeClaimsWatermark(dir, since, extra = {}) {
  * 第一次运行（没有水位线文件）时自动把水位线设成"当前 VOICE 最新一条" ——
  * 这样历史的 143 条不会立刻把 check 弄红，但**从此不再漏新的**。
  */
-export function claimsStatus(root, dir, { createWatermark = true } = {}) {
-  const voices = loadVoices(dir).filter(voiceIsUser);
+/**
+ * ★ R37：`session` 给了就**只算本窗口那本账**（`loadVoices(dir,{session})` 的并集口径）；
+ *   不给就是全集 —— `check` / `report` / `brief` 走的仍是这条，**判定一个字没改**。
+ *
+ * ⚠ **全局水位线只在扫全集时才设**（`createWatermark` 由调用方按窗口口径决定）：
+ *   scoped 一次只覆盖一个窗口，拿它去设那条**全局**水位线是**假证据**，而且两头都会出事 ——
+ *   推后 ⇒ 别的窗口新说的原话被静默放过；提前 ⇒ 一大堆历史原话突然变成"水位线之后"让 check 硬失败。
+ */
+export function claimsStatus(root, dir, { createWatermark = true, session } = {}) {
+  const want = String(session ?? '').trim();
+  const voices = loadVoices(dir, want ? { session: want } : {}).filter(voiceIsUser);
   const { claims, bad } = readClaimLines(dir);
   const claimedKeys = new Set();
   const orphans = [];
@@ -1997,6 +2581,9 @@ export function claimsStatus(root, dir, { createWatermark = true } = {}) {
   return {
     total: voices.length, claimedCount: voices.length - unclaimed.length,
     unclaimed, after, since, watermark, created, claims, bad, orphans,
+    /** 「这次取数来自 N 个窗口」—— 只报条数不报窗口数，读者没法判断口径（R37） */
+    windows: new Set(voices.map((v) => String(v.session ?? ''))).size,
+    scoped: !!want, session: want || null,
   };
 }
 
@@ -2048,11 +2635,15 @@ export function addClaim(dir, { voice, kind, ref, why, by, specIds } = {}) {
   return { ok: true, record: rec, voice: v };
 }
 
-/** 关键词检索用户原话（空格分隔的英文词用 AND；中文靠下面的候选排序） */
-export function searchVoices(dir, kw) {
+/**
+ * 关键词检索用户原话（空格分隔的英文词用 AND；中文靠下面的候选排序）。
+ * ★ R37：`session` 给了就**只在本窗口那本账里查** —— 原来拿几十个窗口混在一起的汇总本查，
+ *   于是"隔壁窗口说过什么"会被当成"用户已经答过"（污染的正源之一）。
+ */
+export function searchVoices(dir, kw, { session } = {}) {
   const words = String(kw ?? '').split(/[\s,，、]+/).filter(Boolean);
   if (!words.length) return [];
-  return loadVoices(dir).filter((v) => words.every((w) => v.text.includes(w)));
+  return loadVoices(dir, session ? { session } : {}).filter((v) => words.every((w) => v.text.includes(w)));
 }
 
 /**
@@ -2064,12 +2655,12 @@ export function searchVoices(dir, kw) {
  * 所以这里改成：**按最长公共子串 + n-gram 重合度排序，把候选捞出来**，
  * 判断"是不是真答过"交给"脑子"那一层（脚本判不准，这点必须诚实）。
  */
-export function rankVoices(dir, question, top = 5) {
+export function rankVoices(dir, question, top = 5, { session } = {}) {
   const q = squash(question);
   if (q.length < 4) return [];
   const grams = new Set();
   for (let n = 3; n <= 5; n += 1) for (let i = 0; i + n <= q.length; i += 1) grams.add(q.slice(i, i + n));
-  return loadVoices(dir)
+  return loadVoices(dir, session ? { session } : {})
     .map((v) => {
       const t = squash(v.text);
       let hit = 0;
@@ -2568,12 +3159,18 @@ export function verifyQuote(root, quote, corpus) {
 
 export function runQuoteAudit(root, { files } = {}) {
   const corpus = corpusText(root);
+  /**
+   * ★ R37：引文核对一律按**全集**取数（口径见 quotes 命令那段注释）。
+   *   `windowStats` 就是"这次扫了几个窗口"的原始数字 —— 输出里必须明写，
+   *   否则读者没法判断这次查的是哪本账（口径与 `voices` 一致：裸 uuid 不算窗口）。
+   */
+  const windowStats = corpusScanStats();
   const targets = quoteTargets(root, files);
   // 「扫了几个文件」必须报出来 —— 扫了 0 个文件却说"没发现问题"，是最坏的一类假通过（实测踩过）
   const scannedFiles = targets.filter((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
   const found = scanAttributions(root, { files });
   const results = found.map((f) => ({ ...f, ...verifyQuote(root, f.quote, corpus) }));
-  return { corpusSize: corpus.length, results, scannedFiles: scannedFiles.length, targets: targets.length };
+  return { corpusSize: corpus.length, results, scannedFiles: scannedFiles.length, targets: targets.length, windowStats };
 }
 
 // ------------------------------------------------------------------ 架构总图
@@ -2926,7 +3523,7 @@ export function auditClaims(root, rec) {
  * ⚠ 这条**推翻**了原来那张表（"总目标 / 架构 / 交付验收 → 2 个脑子（必须两个）"）。
  *   一次性派两个的代价是双份成本，而且第二个脑子在**没有触发条件**时只是在复述第一个 ——
  *   那正是本项目 §一①「差异化」判据要抓的"摆设"：**一个角色的价值 = 它提出的、别人提不出来的东西**。
- *   所以现在的默认是 **1 个**（`单审` 是正常态，不是欠账）；第 2 个只在下面三种条件下派，
+ *   所以现在是**按需**（默认 0 个，只在触发条件成立时才派）；第 2 个只在下面三种条件下派，
  *   而且**必须把是哪种记下来**（`brain record --trigger`）—— 否则事后分不清
  *   "真的需要两个"还是"照旧习惯派了两个"。
  */
@@ -2940,8 +3537,8 @@ export const BRAIN_TRIGGER_IDS = Object.keys(BRAIN_TRIGGERS);
 
 /**
  * 审理状态。判"这份产物能不能定稿"：
- *   0 个脑子 → 没审
- *   1 个脑子 → 单审（**这就是默认**；只有冲突 / 不细 / 要探索更多时才加派第 2 个）
+ *   0 个脑子 → 没审（随手小改动不必审；只在 conflict / shallow / explore 时才需要）
+ *   1 个脑子 → 单审（按需派出；只有冲突 / 不细 / 要探索更多时才加派第 2 个）
  *   2 个脑子一致 → 可以定稿
  *   2 个脑子冲突且无裁判 → ★ 不许定稿
  *   有裁判 → 按裁判的判
@@ -3009,7 +3606,7 @@ export function brainStatus(dir, root) {
       //   读起来像"单审 = 欠账" ⇒ 于是每次都习惯性派两个（用户明确否掉了这个做法）。
       //   现在如实说：默认就是 1 个，第 2 个要**触发条件**。
       const trg = brains[0].trigger && BRAIN_TRIGGERS[brains[0].trigger] ? `（这一份是第 2 个脑子，触发条件：${brains[0].trigger}）` : '';
-      note = `（**默认就是 1 个**；只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才派第 2 个）${trg}：` + brains[0].verdict;
+      note = `（按需派出；只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才派第 2 个）${trg}：` + brains[0].verdict;
     }
     else {
       const vs = new Set(brains.map((b) => b.verdict));
@@ -3146,7 +3743,7 @@ export function recordVote(dir, rec) {
 export function tallyVotes(dir, topic) {
   const votesAll = readVotes(dir);
   const all = votesAll.filter((v) => v.topic === topic);
-  if (!all.length) return { topic, state: '没有投票', counts: {}, votes: [], missing: VOTE_ROLES, roster: VOTE_ROLES, rosterFrom: '默认', outsiders: [], outsiderNote: null, selfAddressed: [], selfAddressedNote: null, conditional: [], conditionalVotes: [] };
+  if (!all.length) return { topic, state: '没有投票', counts: {}, votes: [], missing: VOTE_ROLES, roster: VOTE_ROLES, rosterFrom: '默认', outsiders: [], outsiderNote: null, selfAddressed: [], selfAddressedNote: null, conditional: [], conditionalVotes: [], winCount: 0, majorityNeeded: Math.floor(VOTE_ROLES.length / 2) + 1, hasMajority: false, majorityBase: VOTE_ROLES.length, majorityBaseNote: null, ruleAt: null, ruleFloor: [], accountContradiction: null, accountNote: null };
   const voters = new Set(VOTE_ROLES);
   const latest = new Map();
   const outsiders = [];     // 投了票但**没有投票权**的角色（含名字写错的）—— 出声，但**不计票**
@@ -3173,7 +3770,22 @@ export function tallyVotes(dir, topic) {
   //     本议题开完票之后、别的角色在**另一个议题**上首次投票，会被误判成"当时不在册"，
   //     于是这个席位从本议题的应到名单里**掉了**（票没投也照样算齐）。所以改成问注册表要时刻。
   const _ts = (v) => { const n = Date.parse(String(v?.at ?? '')); return Number.isFinite(n) ? n : null; };
-  const _times = all.map(_ts).filter((n) => n !== null);
+  /**
+   * ★★ **P-M3 修（2026-09-24，「审查」的 outsider.mjs 实测出 ①→② 的反例，原样输出见任务书）**：
+   *   `_firstAt`（= "票的时刻"，判据⑤ `accountContradiction` 与 `_inferred` 都由它推）原来取的是
+   *   **该 topic 全部记录**的 `at` 最小值 —— **含 `outsiders`**（无票席位 `AI测试用户`、名字写错的角色）。
+   *   实测：一份**干净 7/7 同意**（票都落在规则进册之后）⇒ `多数：同意` exit 0、`rule status` 落「试行」；
+   *   只要**再手写一条根本不是票的早期记录**（`AI测试用户`，或把名字写成 `审查员`）⇒
+   *   `_firstAt` 被它拉到 2026-09-01 ⇒ 判据⑤ 判「账目自相矛盾」⇒ 同一份干净 7/7 变成**永久提案**。
+   *   ⇒ **一条没有投票权的记录能冻住整份决议**，而状态文案却写着"**票**的时刻"。
+   *
+   *   修法（**与 `_voted` 同口径**）：`_firstAt` 只认**有票席位**（`voters.has(v.role)`）写的记录 ——
+   *   无票席位的出声照样进 `outsiders` 并单独印出来（`outsiderNote`），但**不参与**"票的时刻"。
+   *   ⚠ **不是放宽**：`_firstAt` 仍取**有票席位全部记录**（含被后投覆盖的早期记录）的 `at` 最小值 ——
+   *     所以「手写小名单 + `at` 提前」那条 R904 夹具（3 条早票**都是在册席位**投的）照旧被拦住（L38 负控④回归）。
+   *     变的只有一件事：**不是票的记录，不再被当成票的时刻**。
+   */
+  const _times = all.filter((v) => voters.has(v.role)).map(_ts).filter((n) => n !== null);
   const _firstAt = _times.length ? Math.min(..._times) : null;
   let recordedRoster = null;    // 最早那条带 roster 的记录里的名单
   let recordedAt = null;
@@ -3182,21 +3794,141 @@ export function tallyVotes(dir, topic) {
     const t = _ts(v); if (t === null) continue;
     if (recordedAt === null || t < recordedAt) { recordedAt = t; recordedRoster = v.roster; }
   }
-  let rosterFrom;
-  let roster;
-  if (recordedRoster) {
-    // 只认**现在还有效**的席位（名单里写了但已从注册表删掉的名字会被剔掉，避免幽灵席位卡住）
-    roster = recordedRoster.filter((r) => voters.has(r));
-    rosterFrom = '票里记的';
-  } else if (_firstAt === null) {
-    roster = VOTE_ROLES;                       // 时间戳全读不到 ⇒ 退回旧行为，**不静默放宽**
-    rosterFrom = '默认（时间戳读不到）';
-  } else {
-    roster = VOTE_ROLES.filter((r) => (SEAT_ADDED_AT[r] ?? 0) <= _firstAt);
-    rosterFrom = '按席位加入时刻';
+  /**
+   * ★★ **过半闸的分母不许由票记录单独决定**（P-M2 修；2026-09-24 实测出两条路，都给了原样输出）：
+   *   路 A：同样 7 票 A=2/B=1/C=1/D=1/E=1/F=1，只在**最早那条**记录里手写
+   *         `roster:["监督员","审查"]` ⇒ 分母变 2 ⇒ `2/2` ⇒ 输出 `结果：**多数：A**` **exit 0**；
+   *   路 B：只把 `at` 提前到 2026-09-01（**不碰 roster**）⇒ 按加入时刻推出 5 席 ⇒
+   *         `A=3/7` 却按 `3/5` 算 ⇒ 又变成 `多数：A` **exit 0**。
+   *   两条路形状相同：**分母被缩到比"实际投了票的在册席位"还小** ——
+   *   同一张票在分子里算一整张、在分母里只算半张 ⇒ **一张票当两票用**。
+   *
+   * 判据（两层，**都不许缩小分母**；写在这里是因为它是"判据"而不是"实现细节"）：
+   *   ① `roster`（应到名单，管「缺席」）：票里记的 / 按加入时刻推出来的，**再并上实际投了票的在册席位**。
+   *      一个席位既然投了票，它就是应到 —— 把投票人排除在应到之外是自相矛盾（路 A 就是靠这个自相矛盾得逞的）。
+   *   ② `majorityBase`（**过半闸的分母**）：取 ①、实际投票席位数、以及**按 `SEAT_ADDED_AT` 在首票时刻
+   *      推出的名单** 三者**最大**。第三条是给「加一席不追溯」留的路。
+   *
+   * 为什么**不会误伤老议题**（L15 的「加席位不追溯」）：
+   *   · 老议题首票时刻早于新席位加入 ⇒ 推出来的就是**当时**那 5 席 ⇒ `majorityBase = 5`，
+   *     3/5 仍然算多数（**不追溯**）—— 判据 ② 里**没有任何一项是"今天的 7 席"**，
+   *     所以老议题不会因为今天有 7 席就被追溯要求多凑 2 票（那正是 L15 要防的"新席位 = 永久否决权"）。
+   *   · L15 ③「票里记了 roster=5、但时刻晚于新席位加入」照旧按记录的 5 席算 `roster`（缺席 0，用例断言不变红），
+   *     只是过半闸的分母取 `max(5, 5, 7) = 7` —— `5/7` 照样过半；
+   *     而它拦住的正是"手写一个更小的名单"那条路（同一个判据，两头都不吃亏）。
+   *
+   * ★★ **P-M2b 补：上面①②还是被"两条腿合并着走"通了**（2026-09-24「审查」造的反例，原样输出见任务书）：
+   *   夹具：`rule propose R904`（规则进册时刻 = 今天）之后，**手写** 3 条票
+   *   （监督员/审查/记录 全同意，`at:"2026-09-01T00:00:00.000Z"`，**首条带 `roster:[那 3 席]`**），
+   *   其余 4 席**一票不投** ⇒
+   *     · `_inferred` 按**首票时刻**（2026-09-01）推 = **5**（为保 L15「不追溯」，这个数本身没错）；
+   *     · 而 `roster` 被手写成 3 ⇒ `missing = 0`（**缺席闸被同一条记录清零**）；
+   *     · `majorityBase = max(3, 3, 5) = 5` ⇒ `3 > 5/2` ⇒ 输出 `结果：**多数：同意**`、exit 0，
+   *       `rule status` 照旧**落盘成「试行」**（RULES.jsonl 末条 `status:"试行"`）。
+   *   形状：**把没投票的席位从"应到"里删掉** ⇒ 缺席闸读到 0 ⇒ 分母只剩"当时在册"的 5 席。
+   *   对照（同一条夹具）：`at` 改回现在 ⇒ 未决；`at` 提前但**不手写 roster** ⇒ `missing=2` ⇒ 缺席·未决。
+   *   ⇒ **这个洞要两条腿同时用**（手写小名单 + 改 `at`）。
+   *
+   * ★ **P-M2b 的判据：规则议题的"账目下限"钉在 RULES.jsonl 的进册时刻上**（判据③④⑤）：
+   *   ③ **规则议题的应到名单（`roster`）不许低于"该规则该修订进册那一刻的在册席位"**
+   *      （`ruleFloor = VOTE_ROLES ∩ SEAT_ADDED_AT ≤ 规则进册时刻`）。
+   *      理由：规则进册那一刻，那些席位**已经在册**了 —— 它们只是"没投票"，不是"不该到"。
+   *      把已在册的席位从应到里删掉，就是**用一条记录把缺席闸清零**（R904 那条路的根因）。
+   *   ④ 于是 `majorityBase` 也不可能小于 `ruleFloor.length`。
+   *   ⑤ **票的时刻早于规则进册时刻 ⇒ 账目自相矛盾 ⇒ 一律未决**（`accountContradiction`）：
+   *      规则还不存在就有人投票，这份账在时间轴上不成立 —— 而它照旧被判「多数」，
+   *      正是因为它把"首票时刻"当成了议题的起点（`_inferred` 由它推）。
+   *      这条是审查给的**可机检判据**：RULES.jsonl 里 R904 自己的 `at` = 2026-09-24…，
+   *      而票声称 2026-09-01 ⇒ 票早于规则存在。
+   *
+   * ⚠ **这条判据的边界（诚实标出，不许说大）**：
+   *   · ③④ **不依赖票记录**：`ruleAt` 取自 `RULES.jsonl`（`appendRule` 用脚本自己的钟写的），
+   *     `ruleFloor` 取自角色注册表的 `SEAT_ADDED_AT`。所以**手写 `VOTES.jsonl` 绕不过它** ——
+   *     把 `roster` 写小 ⇒ 下限把那些席位补回应到；把 `at` 提前 ⇒ 下限仍按规则进册时刻算。
+   *   · 它**能被绕过的路**是改 **`RULES.jsonl` 自己的 `at`**（把规则进册时刻也提前/改写）——
+   *     那是另一条**还没修**的洞（AGENTS.md 机制洞清单里「直接改 `RULES.jsonl` 正文 → 旧票原样跟着」那条）。
+   *     本判据只保证"**票记录单方面说了不算**"，**不保证"整本账被重写"也能查出来**。
+   *   · ⑤ 是"票的 `at`"与"RULES.jsonl 的 `at`"**互相印证**：只改票的 `at` 会让它**报警**，
+   *     不是绕过，是被抓住。
+   *   · **老议题（非 `rule:` 议题）没有"进册时刻"可言** ⇒ ③④⑤ 对它们一律不生效，
+   *     L15 的「加席位不追溯」一个字没动（`majorityBase` 仍然可以小于今天的 7 席 —— 那是设计要的）。
+   */
+  const _inferred = _firstAt === null
+    ? VOTE_ROLES                              // 时间戳全读不到 ⇒ 退回旧行为，**不静默放宽**
+    : VOTE_ROLES.filter((r) => (SEAT_ADDED_AT[r] ?? 0) <= _firstAt);
+  const _voted = VOTE_ROLES.filter((r) => latest.has(r));   // 实际投了票的在册席位
+  /**
+   * ★ 判据③：规则议题的"进册时刻"（`ruleAt`）与它那一刻的在册席位（`ruleFloor`）。
+   *   `ruleAt` = **同一个 id + 同一个 topic** 的记录里**最早**的那条的时刻。
+   *   为什么取最早、不取最新：状态推进（试行/定稿）也是**追加**记录，每条都带自己的 `at`；
+   *   取最新的话，一条已经推进过的规则再跑一次 `rule status`，就会被它**自己后来的记录**
+   *   判成"票早于规则进册"（假阳性）—— 那是把正常操作判成作弊。
+   *   取不到（不是 `rule:` 议题 / 规则册里没有这条 / `at` 读不出来）⇒ ③④⑤ 全部不生效，退回 P-M2 行为。
+   */
+  const _ruleM = /^rule:(.+?)(?:@\d+)?$/.exec(String(topic ?? ''));
+  let ruleAt = null;
+  let ruleFloor = [];
+  if (_ruleM) {
+    const rid = _ruleM[1];
+    let best = null;
+    for (const rec of readRuleRecords(dir)) {
+      if (rec?.kind === 'revision') continue;          // 修订记录不是规则本身（`readRules` 同口径）
+      if (String(rec?.id ?? '') !== rid) continue;
+      if (String(rec?.topic ?? '') !== String(topic)) continue;
+      const t = _ts(rec);
+      if (t === null) continue;
+      if (best === null || t < best) best = t;
+    }
+    if (best !== null) {
+      ruleAt = best;
+      ruleFloor = VOTE_ROLES.filter((r) => (SEAT_ADDED_AT[r] ?? 0) <= ruleAt);
+    }
   }
-  if (!roster.length) { roster = VOTE_ROLES; rosterFrom = '默认（应到名单算空了）'; }
+  // 并集里只留**现在还有效**的席位（名单里写了但已从注册表删掉的名字会被剔掉，避免幽灵席位卡住）
+  const _union = (a, b) => [...new Set([...(a ?? []), ...(b ?? [])])].filter((r) => voters.has(r));
+  const _recorded = recordedRoster ? '票里记的' : (_firstAt === null ? '默认（时间戳读不到）' : '按席位加入时刻');
+  const _baseRoster = recordedRoster ?? (_firstAt === null ? VOTE_ROLES : _inferred);
+  const _rosterNoFloor = _union(_baseRoster, _voted);
+  // ★ 判据③：再并上"规则进册那一刻的在册席位"。
+  //   老议题的 `ruleFloor` 是空的 ⇒ 这一行对它们**一个字都没改**（L15「不追溯」照旧）。
+  const roster = (() => {
+    const r = _union(_rosterNoFloor, ruleFloor);
+    return r.length ? r : VOTE_ROLES;             // 算空了 ⇒ 补回默认（不许把应到名单算成空）
+  })();
+  const _floorMattered = roster.length > _rosterNoFloor.length;
+  const rosterFrom = !_rosterNoFloor.length
+    ? '默认（应到名单算空了）'
+    : (_floorMattered ? `${_recorded} + 规则进册时刻的在册席位（判据③的下限）` : _recorded);
+  // ★ 过半闸的分母：三者取最大（`roster` 里已经含判据③的下限，所以它也 ≥ `ruleFloor.length`）。
+  //   ⚠ **不是"只许变大不许变小"**（P-M2b 把这句话改掉了，它被 R904 那条路证伪过）——
+  //     分母**可以**小于"今天在册的席位数"，那正是 L15 要的「加一席不追溯」（老议题按当时的名单）。
+  //     它真正保证的只有两条：**不小于实际投票席位数**（判据②）、
+  //     **不小于规则进册那一刻的在册席位数**（判据③④）。
+  const majorityBase = Math.max(roster.length, _voted.length, _inferred.length, ruleFloor.length);
   const missing = roster.filter((r) => !latest.has(r));
+  /**
+   * ★ 判据⑤：票的时刻早于规则进册时刻 ⇒ **账目自相矛盾**（审查给的可机检判据）。
+   *   只在 `rule:` 议题上判 —— 别的议题没有"规则进册时刻"这个东西。
+   *   `voteAt` / `ruleAt` 用 ISO 字符串**原样给出**：让读的人自己复核，而不是听一句结论。
+   */
+  const accountContradiction = (ruleAt !== null && _firstAt !== null && _firstAt < ruleAt)
+    ? { voteAt: new Date(_firstAt).toISOString(), ruleAt: new Date(ruleAt).toISOString() }
+    : null;
+  /** 判据③⑤ 的说明行（只在**真的起作用**时打出来，不给干净议题添噪音） */
+  const accountNote = (() => {
+    const parts = [];
+    if (ruleAt !== null && _floorMattered) {
+      parts.push(`本议题是规则议题：规则 ${topic} 进册时刻 ${new Date(ruleAt).toISOString()}，`
+        + `那一刻在册席位 ${ruleFloor.length} 席 —— **应到名单不许低于它**`
+        + `（这条下限来自 ${RULES_FILE} 与角色注册表，**不来自票记录**）。`);
+    }
+    if (accountContradiction) {
+      parts.push(`票的时刻 ${accountContradiction.voteAt} **早于**规则进册时刻 ${accountContradiction.ruleAt}`
+        + ' —— 规则还不存在就有人投票，这是**自相矛盾的账**：按票里记的名单算，'
+        + '等于把当时已在册、只是没投票的席位从"应到"里删掉。');
+    }
+    return parts.length ? parts.join(' ') : null;
+  })();
   const top = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const tied = top.length > 1 && top[0][1] === top[1][1];
   const unclear = cast.filter((v) => !String(v.reason ?? '').trim() || String(v.reason).trim().length < 10);
@@ -3236,12 +3968,68 @@ export function tallyVotes(dir, topic) {
     const byOthers = [...who].filter((x) => x !== v.role);
     if (!byOthers.length) { selfAddressed.push(v.role); unaddressed.push(v.role); continue; }
   }
+  /**
+   * ★ **过半闸**（2026-09-24，「记录」角色算出来的洞 —— 加在第 -1 步）：
+   *   状态机原来**只有四支**，末支是**裸的** `多数：${winner}`，全文 `过半|半数|majority` **0 命中**
+   *   ⇒ **没有任何"过半"判据**。可复现的反例（静态可复算）：
+   *     7 票投 A=2 / B=1 / C=1 / D=1 / E=1 / F=1 ⇒ `top[0][1]=2 ≠ top[1][1]=1` ⇒ `tied=false`；
+   *     missing=0；理由都 ≥10 字；5 张异议票各自**被别人** `address` 过 ⇒ `unaddressed=[]`
+   *     ⇒ 走到裸「多数：A」，而 A 只有 **2/7 = 28.6%**，design 议题 **exit 0**。
+   *   ⇒ **机制会在 2/7 票时宣布"多数"。**
+   *
+   *   判据：`winner` 的票数必须**严格过半**（`> majorityBase / 2`）。分母是**本议题当时的应到名单**
+   *   （`roster` —— 加一席不追溯，见上面那一段），**不是实到票数**：
+   *   分母取实到的话"3 人投票、2 票同意"就成了 66% 的多数 —— 那正是把**缺席当成同意**。
+   *
+   *   ⚠ **P-M2 补（判据本身的洞）**：P-M1 的分母直接用了 `roster.length`，而 `roster` 在
+   *     "票里记了 `roster` 字段"时**照票记录**、否则**按首票时刻推** —— 两条路都能把分母改小
+   *     （手写小名单 / 只改 `at` 时间戳），于是 `2/7`、`3/7` 又能被宣布成"多数"。
+   *     现在分母改用 `majorityBase`（= 应到名单、**实际投票席位数**、按加入时刻推出的名单 三者取最大；
+   *     判据与"为什么不会误伤老议题"写在上面 roster 那一段里）。
+   *     这**不是**放宽、也不是收紧老议题：老议题首票时刻早 ⇒ 推出来的就是当时那 5 席 ⇒ 分母仍是 5。
+   *
+   *   ⚠ 四支老分支的**措辞一个字都没改**（缺席·未决 / 平票·未决 / 有票没理由·未决 /
+   *     `多数：X（异议未回应：…）· 未决`）。过半闸只**插在宣布"多数"之前**：
+   *     没过半时不许说"多数"，改说「未决·分歧」。
+   */
+  const winCount = counts[winner] ?? 0;
+  const majorityNeeded = Math.floor(majorityBase / 2) + 1;
+  const hasMajority = winCount > majorityBase / 2;
   let state;
   if (missing.length) state = '缺席·未决';
   else if (tied) state = '平票·未决';
   else if (unclear.length) state = '有票没理由·未决';
+  else if (!hasMajority) state = `未决·分歧（最高票 ${winner} 只有 ${winCount}/${majorityBase}，未过半；过半要 ${majorityNeeded} 票）`;
   else if (unaddressed.length) state = `多数：${winner}（异议未回应：${unaddressed.join('、')}）· 未决`;
   else state = `多数：${winner}`;
+  /**
+   * ★ 判据⑤的**闸门**：账目自相矛盾（票的时刻早于规则进册时刻）⇒ **无论上面算出什么，一律未决**。
+   *   为什么它必须是独立闸门、而不是只写进注释：
+   *   上面那四支里有一支是**裸的** `多数：${winner}` —— 一份"7 席全在规则进册之前就投了同意"的
+   *   手写账能顺着那一支走到 `多数`（`missing=0`、没过半也不成立），于是 `advanceRule` 会**落盘成「试行」**。
+   *   加上这一条，它才真的推不动（`ruleUnresolved` / `pendingRuleAdvances` 也各有一支认它）。
+   *   ⚠ **不改上面四支的措辞**（老用例的断言一个字没动）—— 只在后面**追加**一句；
+   *     已经未决的（缺席/平票/…）保留原文，读的人仍然看得到"最直接的那条原因"。
+   */
+  if (accountContradiction) {
+    state = /未决/.test(state)
+      ? `${state}（另：票的时刻早于规则进册时刻 —— 账目自相矛盾）`
+      : '未决·账目自相矛盾（票的时刻早于规则进册时刻）';
+  }
+  // 分母被抬高的情形要**说出来**（透明：读的人得知道"应到名单"和"过半闸分母"为什么不是同一个数）
+  /**
+   * ⚠ **P-M2b 改措辞**：原来这句写的是「分母**只许变大不许变小**」——
+   *   而 R904 那条路**证伪了它**（分母确实被缩到 5 过：`max(3, 3, 5)`）。
+   *   现在只说它**真正保证的两条**，并明写它**可以**变小到哪儿 —— 宁可说得窄，不说一句自己做不到的话。
+   */
+  const majorityBaseNote = majorityBase > roster.length
+    ? `过半闸的分母是 ${majorityBase}，而应到名单只有 ${roster.length} 席（来源：${rosterFrom}）——`
+      + ` 实际投票的在册席位 ${_voted.length} 席、按加入时刻推出 ${_inferred.length} 席。`
+      + ` 分母真正保证的只有两条：**不小于实际投票席位数**（${_voted.length}）、`
+      + `**不小于规则进册那一刻的在册席位数**（${ruleFloor.length}）—— 比它们小就等于一张票当两张用。`
+      + ` ⚠ 它**可以**小于"今天在册的 ${VOTE_ROLES.length} 席"（那是「加一席不追溯」要的，老议题按当时的名单）；`
+      + ' 所以"分母只许变大不许变小"这句**是错的**，已经删掉（P-M2b：实测被缩到 5 过）。'
+    : null;
   // 只被自己"回应"过的异议：单列一句 —— 不许让"自己给自己解除异议"看起来像已回应
   const selfAddressedNote = selfAddressed.length
     ? `异议只被它自己"回应"过（**不算解决**，异议方必须由别人回应）：${selfAddressed.join('、')}`
@@ -3259,8 +4047,157 @@ export function tallyVotes(dir, topic) {
   return {
     topic, state, counts, votes: cast, missing, roster, rosterFrom, outsiders, outsiderNote,
     tied, unclear, options, winner, dissenters, unaddressed, selfAddressed, selfAddressedNote,
+    // 过半闸的见证数据（**机读字段** —— 别让消费者去解析 `state` 里那句话）
+    winCount, majorityNeeded, hasMajority,
+    // ★ 过半闸的**分母**（P-M2）：`roster` 管"缺席"，`majorityBase` 管"过半" —— 两个数分开报，
+    //   消费者（ruleUnresolved / unresolvedFixes / pendingRuleAdvances）一律读 `majorityBase`。
+    majorityBase, majorityBaseNote,
+    // ★ 判据③④⑤ 的见证数据（P-M2b，**机读** —— 别让消费者去解析 `state` 里那句话）：
+    //   `ruleAt`            规则（该修订）进册时刻的毫秒戳；不是规则议题 / 取不到 = null
+    //   `ruleFloor`         那一刻的在册席位（应到名单的下限；老议题 = []）
+    //   `accountContradiction`  {voteAt, ruleAt}（ISO）—— 票早于规则进册；没有 = null
+    //   `accountNote`       给人读的说明行（只在判据真的起作用时非空）
+    ruleAt, ruleFloor, accountContradiction, accountNote,
     conditional: conditionalVotes.map((v) => v.role), conditionalVotes,
   };
+}
+
+/**
+ * ==================== 「未决」的消费者（照 B4 可满足性护栏接线） ====================
+ *
+ * ★ 实测洞（2026-09-24，「支线守门员」复算出来的）：机制**已经**会把它判成「未决」
+ *   （缺席 / 平票 / 有票没理由 / 异议未回应），却**没有任何东西把"未决"绑到"实施"那一步** ——
+ *   `advanceRule` 只在 `rule:<id>@<n>` 这条路径上被调（见 `vote cast` 里那个 `rm` 分支），
+ *   **design 议题没有任何推进/实施挂钩** ⇒ 机制说了"未决"、照样通电。
+ *   **这正是事故 I60 的形状**（一条**不可满足**的红接成了 steer：干活再多也不会变绿 ⇒ 只能一直试）。
+ *
+ * 所以按 **B4 可满足性护栏**接线：`vote --topic` 的输出里，**每条"未决"都附一条
+ * "现在就能跑、跑完这条原因就没了"的命令**；**给不出可跑命令的 ⇒ 明写「这是不可满足的未决」**
+ * （不许只印一句"交给脑子继续想"就完事）。
+ *
+ * ⚠ **只接线，不造权**：不给任何角色否决权，只把"哪条路能解除"摆到台面上。
+ * ⚠ **不动 `advanceRule` 的 `rule:` 路径**（那是另一个议题）。
+ * ⚠ 命令里的 `…` 是**要人来填的判断**（投什么 / 为什么），**不是**脚本替他们签字 ——
+ *   角色分权与"票必须带理由"这两条判据一个字都没变。
+ *
+ * 返回**要打印的行**（数组）。它只读 tally 的结果：不写盘、不改台账、不返回值。
+ */
+export function unresolvedFixes(topic, t) {
+  const q = (s) => `"${String(s ?? '')}"`;
+  const cast = (role, choice, reason, extra = '') =>
+    `node warden.mjs vote cast --topic ${q(topic)} --role ${role} --choice ${choice} --reason ${reason}${extra}`;
+  const out = [];
+  const counts = t.counts ?? {};
+  const roster = t.roster ?? VOTE_ROLES;
+  const votes = t.votes ?? [];
+  const winner = t.winner;
+  const winCount = counts[winner] ?? 0;
+  /**
+   * ★ 过半需要几票 —— 分母用 `majorityBase`（P-M2），**不是** `roster.length`：
+   *   两者在"票里记了更小的名单"这类情形下会不一样（`roster` 管缺席、`majorityBase` 管过半），
+   *   分母取小了会给出"差 0 票"这种自相矛盾的解除建议。两个数相等时输出与以前**逐字相同**。
+   */
+  const base = Number.isFinite(t.majorityBase) ? t.majorityBase : roster.length;
+  const need = Math.floor(base / 2) + 1;               // 过半需要几票（严格过半：> base/2）
+  const missing = t.missing ?? [];
+  const halfShort = winner !== undefined && winCount < need;
+
+  // ① 缺席 —— 补那一席的票：**一跑就少一席缺席**（最便宜的一条）
+  for (const role of missing) {
+    out.push(`    · 缺席「${role}」→ 补它的票（投什么是**这一席自己的选择**，脚本不替它投）：`);
+    out.push(`      ${cast(role, '"同意|反对|…（它自己的选择）"', '"…（理由 ≥10 字，落在它的职责里）"')}`);
+  }
+  // ② 平票 —— 让并列的一项里某一席**重新投票**改选另一项（后投的覆盖先投的，票数一跑就变）
+  if (t.tied) {
+    const topN = Math.max(...Object.values(counts));
+    const tiedOpts = Object.entries(counts).filter(([, n]) => n === topN).map(([c]) => c);
+    const from = tiedOpts[0];
+    const to = tiedOpts[1];
+    const mover = votes.find((v) => v.choice === from);
+    if (mover) {
+      out.push(`    · 平票（${JSON.stringify(counts)}）→ 让并列的一项里某一席**重新投票**改选另一项`
+        + `（后投的覆盖先投的，一跑票数就变${need - winCount > 1 ? '；⚠ 改一票只是**不平票**，可能还没过半 —— 见下面那条' : '；改一票就过半'}）：`);
+      out.push(`      ${cast(mover.role, q(to), `"我改主意了：改投 ${to}，理由是 …（≥10 字）"`)}`);
+      out.push(`      （它现在投的是 ${from}；**这一席必须自己愿意改**，脚本不替它改）`);
+    } else {
+      out.push('    · 平票 → **判断不了**哪一席能改投（票里读不到并列项的具体投票人）—— 别猜。');
+    }
+  }
+  // ③ 有票没理由 —— 同一席**重新投同一票 + 补理由**（后投的覆盖先投的，一跑就解除）
+  for (const v of (t.unclear ?? [])) {
+    out.push(`    · 没理由「${v.role}」（它现在投的是 ${v.choice}）→ 重投同一票、把理由补上：`);
+    out.push(`      ${cast(v.role, q(v.choice), '"…（≥10 字：为什么这么投，落在它的职责里）"')}`);
+  }
+  // ④ 异议未回应 —— 由**别人** `--address` 回应它（自己回应自己不算，见 tallyVotes 那一段）
+  for (const role of (t.unaddressed ?? [])) {
+    const who = votes.find((v) => v.choice === winner && v.role !== role);
+    if (who) {
+      out.push(`    · 异议未回应「${role}」→ 由**别人**回应它（自己回应自己不算）：`);
+      out.push(`      ${cast(who.role, q(winner), `"回应 ${role} 的异议：…（逐条答复它的担忧）"`, ` --address ${q(role)}`)}`);
+    } else {
+      out.push(`    · 异议未回应「${role}」→ **判断不了**该由谁回应（票里找不到投「${winner}」的别人）—— 别猜。`);
+    }
+  }
+  // ⑤ 未过半（新加的闸）—— 最高票没到 `majorityBase/2` 以上
+  if (halfShort) {
+    const gap = need - winCount;
+    out.push(`    · 未过半（最高票 ${winner}=${winCount}/${base}，过半要 ${need} 票）→`);
+    if (missing.length) {
+      out.push(`      **现在还判断不了**：有 ${missing.length} 席缺席，它们投完可能就过半了 ——`);
+      out.push('      先把上面那些缺席的票补上，再回来看这一条（缺席还没补齐时不许说"不可满足"）。');
+    } else if (gap === 1 && !t.tied) {
+      const donor = votes.find((v) => v.choice !== winner);
+      if (donor) {
+        out.push(`      差 **1 票**：让**别人**改投「${winner}」就过半（一条命令，跑完这条原因就没了）：`);
+        out.push(`      ${cast(donor.role, q(winner), `"我改主意了：改投 ${winner}，理由是 …（≥10 字）"`)}`);
+      } else {
+        out.push('      **判断不了**该由谁改投（票里找不到投别的选项的人）—— 别猜。');
+      }
+    } else if (gap === 1) {
+      out.push('      差 **1 票** —— 上面那条"改投"跑完就**同时**解掉平票与未过半（不用再来一条）。');
+    } else {
+      out.push('      **这是不可满足的未决**：一条命令解除不了它 ——');
+      out.push(`      要让「${winner}」涨到 ${need} 票，至少得 **${gap} 席同时改投**同一选项`
+        + '（改一席最多 +1，仍不过半）；计票器里没有"替他们改"的命令。');
+      out.push('      真实的路只有两条（都不在计票器里）：① 重开一个**选项收敛**的议题'
+        + '（选项先由角色提名，别再让一个人写候选集）；② 派脑子复审，让它给一个不违反任何条件的收敛方案。');
+    }
+  }
+  // ⑥ 账目自相矛盾（P-M2b）—— 票的时刻早于规则进册时刻
+  /**
+   * 这一支**给不出"跑完这条原因就没了"的命令**，因为问题不在票的多少，而在**账的时间轴**。
+   *
+   * ⚠ **P-M3 修（2026-09-24，「审查」的 remedy.mjs 实测出建议①按字面跑不通，原样输出见任务书）**：
+   *   原来这里写「① 把票**重新投一次**（新写进去的记录带新的 `at`，会落在规则进册之后）」——
+   *   **那条路跑不通**：`VOTES.jsonl` 是 **append-only**，重投只是**追加**记录，
+   *   而"票的时刻"取的是**最早那条** ⇒ 早票永远留着、账目自相矛盾照旧。
+   *   实测：按建议①用 `vote cast` 重投那 3 席 ⇒ exit 1、**仍含**"账目自相矛盾"；
+   *        7 席全部重投一遍 ⇒ exit 1、**仍含**"账目自相矛盾"；
+   *        而建议②（`rule amend` 开新修订号）⇒ 新议题上 exit 0、**不含**"账目自相矛盾"。
+   *   ⇒ 按 A6 把这一支如实分成两半：**本议题这一支不可满足**（给不出可跑命令，明写出来），
+   *     出路只有"换议题"那条 —— 而且它**不是**"补一票"，是换一个议题重新开账。
+   *   ⚠ 「手改 `VOTES.jsonl` 删掉旧记录」**能**让这句话消失，但计票器**没有这条命令**；
+   *     而且那正是 P-M2/P-M2b 要防的"手写票记录改变结论" ⇒ **不把它算作合法出路**（这里如实写出来，
+   *     是为了不假装"没有这条路"，不是推荐它）。
+   */
+  if (t.accountContradiction) {
+    out.push(`    · 账目自相矛盾（票的时刻 ${t.accountContradiction.voteAt} 早于规则进册时刻 ${t.accountContradiction.ruleAt}）→`);
+    out.push('      **这是不可满足的未决：本议题给不出"跑完这条原因就没了"的命令**'
+      + '（A6 —— 给不出可跑命令的，明写出来，不编一条跑不通的）。');
+    out.push('      补票 / 改投 / **重投**都解不掉它：这份账在时间轴上不成立（规则还不存在就有人投票），');
+    out.push('      而"票的时刻"取的是**该议题在册席位记录里最早的那一条**，`VOTES.jsonl` 又是 append-only ⇒ 旧记录永远留着。');
+    out.push('      ⚠ 这里原来写的「① 把票**重新投一次**（新记录带新的 `at`）」—— **实测跑不通**，已经删掉。');
+    out.push('      ⚠ 「手改 `VOTES.jsonl` 删掉旧记录」**能**让它消失，但计票器没有这条命令，'
+      + '而且那正是要防的"手写票记录改变结论" —— **不算合法出路**。');
+    out.push('      唯一真实的出路（不是补一票，而是**换一个议题重新开账**）：');
+    out.push(`        ① 重开一个修订号：\`node warden.mjs rule amend --id … --text "…"\` ⇒ 新议题 \`rule:<id>@<n+1>\` 从新的时刻开始，`);
+    out.push('           **再在新议题上把票投一遍**；旧议题（`@<n>`）那份账**原样留着**，不假装它被修好了。');
+  }
+  // A6：**输入为 0 不许报成功** —— 走到这里一条都没给出来，说明"未决原因没被覆盖"，那是接线漏了
+  if (!out.length) {
+    out.push('    （这一支没给出命令 —— 说明有未决原因没被这里覆盖，那是**接线漏了**，别当它已解除）');
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ 规则册（可投票的规则）
@@ -3277,6 +4214,89 @@ export function tallyVotes(dir, topic) {
  * 所以 `rules` 把两类分开列，并把「文本规则占比」当成要盯的指标打出来。
  */
 const RULES_FILE = 'RULES.jsonl';
+
+/* ==========================================================================
+ * 补丁块 A —— 常量与插件解析（插在 warden.mjs 的 `const RULES_FILE = ...` 附近）
+ * ========================================================================== */
+
+/**
+ * ★ 怎么找到 `handover-gate.js` —— **先问真源，再退回候选**。
+ *
+ * ⚠ 第一版写死三个"猜的"位置（`$DSH_HOME/plugin` 等），**实测全部落空**：
+ *   `.dsh` 底下**根本没有** `plugin` 目录，那份文件不在 `$DSH_HOME` 里。
+ *   ⇒ 这就是"不许猜"的现场：猜出来的三条路**一条都不通**，命令一律拒收。
+ *   真源是 **`cordis.patch.yml` 里那一行 `name:`**（本机 =
+ *   `<WORKSPACE>/task-warden/plugin/handover-gate.js`）—— 实测：
+ *     `<HOME>\.dsh\profiles\desktop\cordis.patch.yml:118-119`
+ *       `- id: handover-gate`
+ *         `name: <WORKSPACE>/task-warden/plugin/handover-gate.js`
+ *   ⇒ 所以顺序是：**① 读 patch yml 里点名的那一份**（真源），
+ *     **② 环境变量 `WARDEN_HANDOVER_GATE`**（显式覆盖，给别的机器用），
+ *     **③ 与 `warden.mjs` 同目录的那一份**（同源副本，公开包里就是它）。
+ *   三条都不通 ⇒ **拒收 exit 2 并列出找过哪些**，**绝不退回"猜一份常量"**。
+ */
+export function candidatePaths() {
+  const out = [];
+  const env = String(process.env.WARDEN_HANDOVER_GATE || '').trim();
+  if (env) out.push(env);
+  // ① 真源：本机 profile 的 cordis.patch.yml 里点名的那一行
+  const dshHome = process.env.DSH_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '', '.dsh');
+  for (const prof of ['desktop', 'web', 'headless']) {
+    const yml = path.join(dshHome, 'profiles', prof, 'cordis.patch.yml');
+    try {
+      if (!fs.existsSync(yml)) continue;
+      const txt = String(fs.readFileSync(yml, 'utf8'));
+      // 抓 `- id: <x>` 与紧随的 `name:`，只认名字里带 handover-gate 的那一条
+      const re = /-\s*id:\s*([^\s]+)\s*\r?\n\s*name:\s*([^\r\n]+)/g;
+      let m;
+      while ((m = re.exec(txt)) !== null) {
+        const name = m[2].trim();
+        if (!/handover-gate/i.test(name)) continue;
+        const p = path.isAbsolute(name) ? name : path.resolve(path.dirname(yml), name);
+        if (out.indexOf(p) < 0) out.push(p);
+      }
+    } catch (e) { /* 读不动这个 profile 就试下一个 */ }
+  }
+  // ③ 与 warden.mjs 同目录的那一份（skill 目录里若随包发了副本）
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const p = path.join(here, 'handover-gate.js');
+    if (out.indexOf(p) < 0) out.push(p);
+  } catch (e) { /* 记不上就算了 */ }
+  return out;
+}
+
+const HANDOVER_LEDGER_NAME = 'HANDOVER-GATE.jsonl';
+
+/**
+ * 解析 `handover-gate.js` 并取出 `_internals`。
+ * 返回 `{ ok:true, I, from }` 或 `{ ok:false, why, tried:[...] }`（**绝不抛**）。
+ */
+export function loadHandoverGate() {
+  const tried = [];
+  let require_ = null;
+  try {
+    require_ = createRequire(import.meta.url);
+  } catch (e) {
+    return { ok: false, why: 'createRequire 不可用：' + String((e && e.message) || e), tried };
+  }
+  for (const p of candidatePaths()) {
+    tried.push(p);
+    try {
+      if (!p || !fs.existsSync(p)) continue;
+      const m = require_(p);
+      const I = m && m._internals;
+      if (!I || typeof I.buildAutoDraft !== 'function' || typeof I.isHandoverName !== 'function') {
+        return { ok: false, why: `找到了 ${p}，但它没有 _internals.buildAutoDraft / isHandoverName（版本不匹配？）`, tried };
+      }
+      return { ok: true, I, from: p };
+    } catch (e) {
+      // 单个候选坏了就试下一个；全坏了才报
+      tried[tried.length - 1] = `${p}  —— 载入失败：${String((e && e.message) || e)}`;
+    }
+  }
+  return { ok: false, why: '没有任何一条路能拿到 handover-gate.js（真源 = cordis.patch.yml 里点名的那个 name）', tried };
+}
 export const RULE_STATUSES = ['提案', '试行', '定稿', '否决', '废止', '待并条件'];
 export const ENFORCED_KINDS = ['code', 'text'];
 const RULE_YES = '同意';
@@ -3295,6 +4315,25 @@ export function unanimousNoDissent(t) {
   //   老议题永远凑不齐 7 票 ⇒ 一律返回 false ⇒ 「全员同意且零反对」这条判据
   //   对**所有已有议题**失效（不是变得严格，是变成死代码）。
   //   加一席的作用应该是"以后的新议题要多问一个人"，不是"追溯作废过去的判决"。
+  /**
+   * ⚠ **未申报的行为改动 —— P-M2b 如实申报（任务书第 2 条）**：
+   *   `t.roster` 在 P-M2 里从"票里记的名单"变成了**并集**
+   *   （票里记的 ∪ 实际投票的在册席位 ∪ 规则进册时刻的下限），这一行的语义跟着变了。
+   *   实测那类旧场景：**「票里记了 5 席 + 今天 7 席都投了票」** ——
+   *     · P-M2 之前：`roster` = 记录的 5 席 ⇒ `need = 5`、`votes.length = 7` ⇒ **false**；
+   *     · P-M2 之后：`roster` = 并集 7 席 ⇒ `need = 7`、`votes.length = 7` ⇒ **true**。
+   *   即：**从 false 变 true**（"零反对·疑似顺从"这条审查标记会亮起来）。
+   *
+   *   **选择：申报，不改回去**。理由（三条，都可复核）：
+   *     ① 它**不控制推进**，只控制"疑似顺从"这条**审查标记**
+   *        （`suspicionFlag` / `zeroDissentDetail` / `rulesView` 的 flags）——
+   *        方向是**更严**（多要一次说明），不是更松，不会放过任何东西；
+   *     ② 并集正是本文件现在认定的"应到名单"（判据①③）。一边不信任"票里记的小名单"、
+   *        一边又拿它当 `need`，就是**同一个数在两处用两套口径** —— 那正是 P-M2 要治的病；
+   *     ③ 并集语义下这一行是**恒等**的：`missing` 为空 ⇒ `roster ⊇ votes`（并集性质）
+   *        且 `roster ⊆ votes`（没有缺席）⇒ `roster.length === votes.length`。
+   *        改回"记录名单"会造出一个**与缺席判据互相矛盾**的分支（缺席闸说 0，这一行说没齐）。
+   */
   const need = Array.isArray(t.roster) ? t.roster.length : VOTE_ROLES.length;
   if (t.votes.length !== need) return false;
   return t.votes.every((v) => v.choice === RULE_YES);
@@ -3977,14 +5016,49 @@ export function reopenRule(dir, { id, why, force = false, by }) {
   return { rule: next, prev: rule, rev, wasFinal };
 }
 
-/** 未决原因（脚本只算数：平票 / 缺席 / 有异议没被回应 都算未决） */
+/**
+ * 未决原因（脚本只算数：平票 / 缺席 / 有异议没被回应 / **未过半** 都算未决）
+ *
+ * ★ **P-M2：过半闸必须接进 rule 路径**（实测事故，原样输出见任务书）：
+ *   P-M1 给 `tallyVotes` 加了过半闸，`vote --topic` 会印「未决·分歧（…未过半…）」、exit 1，
+ *   但 `rule status` 的「未决原因」行照旧写「（没有 —— 票收齐了，也没有没被回应的异议）」、
+ *   「推进」行照旧写「多数：同意 → 可以定稿」，`advanceRule` 照旧**落盘成「试行」** ——
+ *   落盘证据是 RULES.jsonl 末条**同一条记录里同时写着** `"status":"试行"` 与
+ *   `"transition":{"tally":"未决·分歧（…未过半…）"}`。⇒ **过半闸在 `rule:` 路径上是装饰。**
+ *   根因：本函数（`ruleUnresolved`）是 `advanceRule` / `rule status` / `pendingRuleAdvances`
+ *   共用的唯一"能不能推进"判据，而它**不认 `hasMajority`**。现在认了。
+ *
+ * 判据：**未过半 ⇒ 未决**（分母是 `majorityBase`，不是实到票数、也不许被单条记录缩小）。
+ *   为什么放在"有票没理由"之后、"异议没被回应"之前：与 `tallyVotes` 里状态机的分支顺序一致，
+ *   读的人不会看到"票况说未过半、未决原因却只字不提"。
+ *   多种原因同时成立时**全都说出来**（原来只报第一条，会让"未过半"被"缺席"之类盖住）。
+ *   ⚠ 只有一条原因时，输出与改动前**逐字相同**（老用例的断言不受影响）。
+ */
 function ruleUnresolved(t) {
   if (t.state === '没有投票' || !t.votes.length) return '还没有票（五个角色一个都没投）';
-  if (t.missing.length) return `缺席：${t.missing.join('、')}`;
-  if (t.tied) return `平票：${JSON.stringify(t.counts)}`;
-  if (t.unclear.length) return `有票没理由（<10 字）：${t.unclear.map((v) => v.role).join('、')}`;
-  if (t.unaddressed.length) return `异议没被回应：${t.unaddressed.join('、')}`;
-  return null;
+  const base = Number.isFinite(t.majorityBase) ? t.majorityBase : (t.roster ?? VOTE_ROLES).length;
+  const reasons = [];
+  if (t.missing.length) reasons.push(`缺席：${t.missing.join('、')}`);
+  if (t.tied) reasons.push(`平票：${JSON.stringify(t.counts)}`);
+  if (t.unclear.length) reasons.push(`有票没理由（<10 字）：${t.unclear.map((v) => v.role).join('、')}`);
+  // ★ 过半闸：没过半 ⇒ 未决（这就是"2/7 不许当多数"那条闸在 rule 路径上的落点）
+  if (t.hasMajority === false) {
+    reasons.push(`未过半：最高票「${t.winner}」只有 ${t.winCount}/${base} 票（过半要 ${t.majorityNeeded ?? (Math.floor(base / 2) + 1)} 票）—— 不许推进`);
+  }
+  if (t.unaddressed.length) reasons.push(`异议没被回应：${t.unaddressed.join('、')}`);
+  /**
+   * ★ 判据⑤（P-M2b）：**账目自相矛盾 ⇒ 未决**（票的时刻早于规则进册时刻）。
+   *   它**必须**在这里也有一支：本函数是 `advanceRule` / `rule status` / `pendingRuleAdvances`
+   *   共用的**唯一**"能不能推进"判据。只改 `tallyVotes` 的 `state` 而不认这里，
+   *   `rule status` 就会照旧写「未决原因：（没有）」并**落盘成「试行」** ——
+   *   那正是 P-M1 被打脸的那条（同一条记录里同时写着 `status:"试行"` 与 `tally:"未决…"`）。
+   *   ⚠ 放在**最后**追加：只有一条原因时，输出与改动前**逐字相同**（老用例的断言不受影响）。
+   */
+  if (t.accountContradiction) {
+    reasons.push(`账目自相矛盾：票的时刻 ${t.accountContradiction.voteAt} 早于规则进册时刻 ${t.accountContradiction.ruleAt}`
+      + '（规则还不存在就有人投票，这份账在时间轴上不成立）');
+  }
+  return reasons.length ? reasons.join('；') : null;
 }
 
 function writeRuleStatus(dir, rule, status, t, extra = {}) {
@@ -4137,7 +5211,15 @@ export function ruleStats(dir) {
   };
 }
 
-/** check 用：`提案` 且五个角色的票都**收齐了** → 提示"待推进"（只提示，不拦） */
+/**
+ * check 用：`提案` 且五个角色的票都**收齐了** → 提示"待推进"（只提示，不拦）
+ *
+ * ★ P-M2：**未过半的不许报成"待推进"**。原来只挡 `!votes.length` 与 `missing`，
+ *   于是 3/7 同意（票收齐、没人缺席）的规则会被 `check` 印成"票已齐、待推进"，
+ *   跑 `rule status` 才知道根本推不动 —— 那句"待推进"是在骗人去点一个点不动的按钮。
+ *   （平票 / 有异议没被回应**仍然**照旧报"待推进"：那是本函数**原有**的松弛，
+ *     代码里那段注释明确把结论交给 `rule status`；本次只加过半闸这一条，不顺手改别的。）
+ */
 export function pendingRuleAdvances(dir) {
   const { rules } = readRules(dir);
   const out = [];
@@ -4145,6 +5227,10 @@ export function pendingRuleAdvances(dir) {
     const t = tallyVotes(dir, r.topic);
     if (r.status === '提案') {
       if (!t.votes.length || t.missing.length) continue;
+      // ★ 过半闸：没过半 ⇒ 不是"待推进"，是"推不动"（改它的判据见 tallyVotes 里 roster 那一段）
+      if (t.hasMajority === false) continue;
+      // ★ 判据⑤（P-M2b）：账目自相矛盾 ⇒ 同样推不动，**不许**报成"票已齐、待推进"
+      if (t.accountContradiction) continue;
       out.push({ rule: r, tally: t, kind: '待推进' });
     } else if (r.status === RULE_PENDING_CONDITIONS) {
       out.push({ rule: r, tally: t, kind: '待并条件' });
@@ -4249,6 +5335,8 @@ export function ruleDetail(root, id, { promote = false } = {}) {
   const _laterSeats = VOTE_ROLES.filter((r) => !(t.roster ?? VOTE_ROLES).includes(r));
   if (_laterSeats.length) L.push(`    （${_laterSeats.join('、')} 是本议题开启之后才加的席位，不计入应到）`);
   L.push(`  票况：${t.state}    （应到名单来源：${t.rosterFrom ?? '默认'}）`);
+  if (t.majorityBaseNote) L.push(`  ⚑ ${t.majorityBaseNote}`);
+  if (t.accountNote) L.push(`  ⚑ ${t.accountNote}`);
   if (t.selfAddressedNote) L.push(`  ⚠ ${t.selfAddressedNote}`);
   if (t.outsiderNote) L.push(`  ⚑ ${t.outsiderNote}`);
   const why = ruleUnresolved(t);
@@ -4267,6 +5355,473 @@ export function ruleDetail(root, id, { promote = false } = {}) {
 }
 
 // ------------------------------------------------------------------ CLI
+/* ==========================================================================
+ * 补丁块 B —— 子命令实现
+ * ========================================================================== */
+
+/**
+ * ★★ **本单实测出来的一个真 bug（不许悄悄绕过它，要说出来）**：
+ *   `handover-gate.js:1094` 的 `lastRoundOf()` 读的是 **`o.req`**，
+ *   而 `warden.mjs record` 写进 `.warden/ROUNDS.jsonl` 的字段名是 **`requirement`**
+ *   （`warden.mjs:5507` `requirement: req`）。实测：
+ *     · 拿**真账本**（`F:\<USER>\Documents\GitHub\coco26\.warden\ROUNDS.jsonl`）喂它 ⇒
+ *       返回 **`"? / partial"`** —— 需求号那一半**永远是 `?`**；
+ *     · 手写一条 `{"req":"R10","status":"x"}` 它才认（而账本里**没有**这种行）。
+ *   ⇒ 后果：**草稿里"本轮 record"那一行永远是 `? / <status>`，需求号丢了** ——
+ *     而这一行正是"接手的人知道这轮在推进哪条需求"的唯一来源。
+ *
+ * ⚠ **我不改 `handover-gate.js`**（任务书明令：它正被另一单碰着，会撞墙）。
+ *   做法：**在本文件里做一次规范化** —— 把 `requirement` 映射成 `req` 之后**自己算**，
+ *   并**优先**用自己算的（它认两种字段名）；`lastRoundOf` 只当退路。
+ *   这样即使那边以后修好了，本命令**照样对**（向后兼容，不会双重修复出问题）。
+ *   ➜ 这条要**报给主代理**：`handover-gate.js` 那份是**独立的真 bug**，
+ *     影响的是**它自己**自动草稿里那一行（不只我这边的显式命令）。
+ */
+export function lastRoundNormalized(root, I) {
+  const p = path.join(root, '.warden', 'ROUNDS.jsonl');
+  try {
+    if (!fs.existsSync(p)) return '';
+    const lines = String(fs.readFileSync(p, 'utf8')).split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i].trim();
+      if (!l) continue;
+      let o = null;
+      try { o = JSON.parse(l); } catch (e) { continue; }
+      if (!o || typeof o !== 'object') continue;
+      // ★ 两种字段名都认：`req`（插件口径）与 `requirement`（warden.mjs 的真实口径）
+      const req = String(o.req ?? o.requirement ?? '').trim();
+      const st = String(o.status ?? '').trim();
+      if (!req && !st) continue;
+      return (req || '?') + ' / ' + (st || '?');
+    }
+    return '';
+  } catch (e) {
+    // 读不动就退回插件那份（它至少还能给出 status 那一半）
+    try { return I.lastRoundOf(root); } catch (e2) { return ''; }
+  }
+}
+
+/**
+ * 本轮的"改动清单"从哪里来（**这是本命令唯一一处"猜"，必须写清**）。
+ *
+ * ★ **实测结论（2026-09-26）**：`handover-gate.js` 的 `draftDirtyNow()` 拿的是
+ *   **插件内存 state**（`state.pending` / 本回合脏桶）—— 那条路只有在**插件的写闸
+ *   判定链**上才成立（它靠 `onToolResult` 记账）。
+ *   而**显式命令**跑在**另一个进程**里：它**没有**那份内存 state。
+ *   ⇒ 所以本命令**不用** `draftDirtyNow`，改用**可从盘上复算**的判据：
+ *
+ *     ① 优先 `--files a,b,c`（**显式声明**，人来给）—— 最可靠，永远是第一顺位；
+ *     ② 否则用 `git status --porcelain`（工程根必须是 git 仓库）——
+ *        只取 **修改/新增/重命名** 的**文件**（不取目录），
+ *        **排除 `.warden` / `.dsh`**（沿用 `AUTO_DRAFT_EXCLUDE_DIRS` 的口径）；
+ *     ③ 两条都拿不到 ⇒ **`no-dirty`，不写**（**不许**退回"整个工作区都算改动"）。
+ *
+ * ⚠ **第 ② 条的已知偏差，如实标注**：
+ *   · 它算的是"**相对 HEAD 的未提交改动**"，**不是**"这一轮改的"。
+ *     若一轮里改了又 commit，它**看不见** ⇒ 会判 `no-dirty` ⇒ **不写**。
+ *     这是**fail-closed** 的方向（宁可不写，也不许写一份改动清单是错的草稿），
+ *     但它意味着：**要求准确的清单，就显式给 `--files`。**
+ *   · `git status` 会把**别的会话/子代理**改的文件也算进来（本仓实测有并发写同一棵树）
+ *     ⇒ 清单可能**偏大**。这一条**没法从盘上消除**，所以草稿里明写来源。
+ *   · **无 git 的工程**（`.git` 不存在）⇒ 第 ② 条拿不到 ⇒ 只能靠 `--files`。
+ *
+ * 返回 `{ paths, dropped, src }`；`src` 会**逐字写进草稿与留痕**（不许静默换口径）。
+ */
+export function collectDirtyFiles(root, opts = {}) {
+  const explicit = Array.isArray(opts.files) ? opts.files.filter((s) => String(s || '').trim()) : [];
+  if (explicit.length) return { paths: explicit.map((s) => String(s)), dropped: 0, src: '显式声明 --files' };
+
+  let out = '';
+  let code = null;
+  try {
+    const { spawnSync } = require_childProcess();
+    const r = spawnSync('git', ['status', '--porcelain', '-z', '--untracked-files=all'], {
+      cwd: root, encoding: 'utf8',
+      // ⚠ 必须 `pipe` 才拿得到输出。**本沙箱里 pipe 会 EPERM**（见文末"没能验证"）——
+      //   被拒时下面是 catch 分支 ⇒ 判 no-dirty ⇒ 不写（fail-closed），不是静默成功。
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (r && r.error) throw r.error;
+    code = r ? r.status : null;
+    if (code !== 0) throw new Error(`git status 退出码 ${code}`);
+    out = String(r.stdout || '');
+  } catch (e) {
+    return { paths: [], dropped: 0, src: '（拿不到：' + String((e && e.message) || e).slice(0, 80) + '）', failed: true };
+  }
+
+  const seen = new Map();
+  let dropped = 0;
+  // `-z` 分隔空字节；重命名是 "R  new\0old\0" 两段，这里只关心**新路径**
+  const parts = out.split('\0').filter((s) => s.length >= 4);
+  for (const p of parts) {
+    const flag = p.slice(0, 2);
+    if (flag[0] === 'R' || flag[0] === 'C') continue; // 重命名/复制的旧路径段，跳过
+    const rel = p.slice(3);
+    if (!rel) continue;
+    const seg = rel.replace(/\\/g, '/').split('/');
+    if (seg.length >= 2 && (seg[0] === '.warden' || seg[0] === '.dsh')) { dropped += 1; continue; }
+    const k = rel.toLowerCase();
+    if (!seen.has(k)) seen.set(k, path.join(root, rel));
+  }
+  return { paths: Array.from(seen.values()).sort(), dropped, src: 'git status --porcelain（相对 HEAD 的未提交改动）' };
+}
+
+/** 延迟取 `node:child_process`（顶层静态 import 也可以，这里只为把依赖收在一处） */
+function require_childProcess() {
+  return { spawnSync: _spawnSync };
+}
+let _spawnSync = null;
+try {
+  // eslint-disable-next-line
+  _spawnSync = (await import('node:child_process')).spawnSync;
+} catch (e) { _spawnSync = null; }
+
+/**
+ * append 一行留痕到 `.warden/HANDOVER-GATE.jsonl`（记录② 的落点）。
+ *
+ * ⚠ **为什么是 `HANDOVER-GATE.jsonl`**：任务书给了"或你论证更合适的位置"。
+ *   论证：**同一个文件名、同一个目录**已经是这个功能的账
+ *   （`handover-gate.js:652` 的候选顺序就是 `<root>/.warden/HANDOVER-GATE.jsonl`）。
+ *   另起一本 ⇒ 查"跑过没跑过"要翻两个文件 ⇒ 记录② 想解决的"C 与 B 不可区分"
+ *   会**原样复发**（两个账本各记一半，谁也不全）。所以**并进同一本**。
+ *   ⚠ 与插件写的那本**共用一个文件**，所以字段名刻意与它**不冲突**：
+ *   插件写 `ev`，本命令写 `ev: 'handover-cmd'` + `kind`；两边的行都能被同一套 grep 捞出来。
+ *
+ * ⚠ **写留痕失败怎么办**（盘不可写）：
+ *   草稿**已经写成了** ⇒ **不许**因为留痕失败就报"整体失败"（那是把已成功的事说成失败）。
+ *   做法：草稿保留、**明写"留痕失败"**、exit code 用 **0**（写成功）但**在正文显著位置报警**，
+ *   并且**不**把 `--dry` 的路径算进来。反过来，如果**草稿没写成**、留痕也失败 ⇒ exit 非 0。
+ */
+export function appendHandoverLedger(root, row) {
+  const p = path.join(root, WARDEN_DIR_NAME, HANDOVER_LEDGER_NAME);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, JSON.stringify(row) + '\n', 'utf8');
+    return { ok: true, path: p };
+  } catch (e) {
+    return { ok: false, path: p, why: String((e && e.message) || e).slice(0, 160) };
+  }
+}
+
+const WARDEN_DIR_NAME = '.warden';
+
+/** 谁调的 —— **主代理**（提问闸门那条硬要求：执行者必须是主代理） */
+function callerOf() {
+  const sid = String(process.env.DSH_SESSION_ID || '').trim();
+  return {
+    by: '主代理',
+    session: sid || null,
+    pid: process.pid,
+    at: new Date().toISOString(),
+  };
+}
+
+/**
+ * ★★ **本命令的唯一入口**。
+ *
+ * `argv` = `handover` 之后的参数（例如 `['draft','--next','…','--dry']`）。
+ * 返回 **exit code**（0/1/2），**绝不抛**。
+ *
+ * 判定顺序（**写在这里，代码就按这个顺序**）：
+ *   1. 认子命令（`draft` / `log`）—— 不认识 ⇒ 用法错 exit 2
+ *   2. `draft`：
+ *      a. 同时给 `--next` 与 `--no-next` ⇒ **拒**（两个声明互相打架，不替人挑一个）exit 2
+ *      b. 两个都没给 ⇒ **拒**（`no-declaration`）exit 2
+ *      c. `--no-next` ⇒ **只留痕、不写草稿、不动写闸** ⇒ exit 0
+ *      d. `--next` ⇒ 载入插件 → 工程根 → 改动清单 → `buildAutoDraft` → 四道阀 → 写/不写
+ *   3. `log`：把留痕读出来（**只读**）
+ */
+export async function runHandoverDraft(argv, ctx = {}) {
+  const out = ctx.out || ((s) => console.log(s));
+  const err = ctx.err || ((s) => console.log(s));
+  try {
+    const a = Array.isArray(argv) ? argv.slice() : [];
+    const sub = String(a[0] || '').trim();
+    const rest = a.slice(1);
+    const has = (f) => rest.includes(f);
+    const opt = (n) => {
+      const i = rest.indexOf(`--${n}`);
+      return i >= 0 && i + 1 < rest.length && !String(rest[i + 1]).startsWith('--') ? rest[i + 1] : undefined;
+    };
+
+    if (sub === 'log') return handoverLog(rest, ctx, out);
+    if (sub !== 'draft') {
+      err('用法错：handover 只有两个子命令 —— `draft`（收口时写一次）与 `log`（查跑过没跑过）。');
+      err('  node warden.mjs handover draft --next "下一步是什么"');
+      err('  node warden.mjs handover draft --no-next "活已做完，只需用户 push"');
+      err('  node warden.mjs handover log [--last N] [--json]');
+      return 2;
+    }
+
+    const root = ctx.root;
+    const dry = has('--dry');
+    const next = opt('next');
+    const noNext = opt('no-next');
+
+    /* ── a. 两个声明打架 ⇒ 拒 ───────────────────────────────────────────── */
+    if (next !== undefined && noNext !== undefined) {
+      err('[拒收] 你同时给了 `--next` 和 `--no-next` —— 这是两个**互相打架**的声明。');
+      err('  `--next "…"`     = 这一轮做完还有后续 ⇒ **写**交接草稿');
+      err('  `--no-next "…"`  = 这一轮明确完成、无后续 ⇒ **不写**，只留痕');
+      err('  不替你挑一个：你说的是哪一种？删掉另一个再来。');
+      return 2;
+    }
+
+    /* ── b. 什么都没声明 ⇒ 拒（这也是"默认什么都不做"的守卫） ───────────── */
+    if (next === undefined && noNext === undefined) {
+      err('[拒收] 没有声明「这一轮做完**还有没有后续**」—— 所以什么都不做。');
+      err('  为什么必须有这一句：交接的写入判据是**显式声明**，不是从账本里猜。');
+      err('    实测 `.warden/ROUNDS.jsonl` 114 条里 `plan` 只有 1 条非空、`branch` 0 条');
+      err('    ⇒ 账本里**没有**可靠信号能判"有没有后续"。');
+      err('  两条正路（选一条）：');
+      err('    · 有后续、要留交接：node warden.mjs handover draft --next "把 X 推到远端，然后重跑自检"');
+      err('    · 已做完、无后续：  node warden.mjs handover draft --no-next "活已做完，只需用户 push"');
+      return 2;
+    }
+
+    /* ── c. --no-next：正规出口。只留痕，不写草稿，不动写闸 ─────────────── */
+    if (noNext !== undefined) {
+      const text = String(noNext).trim();
+      if (!text) {
+        err('[拒收] `--no-next` 后面那句话是空的（只有空白 = 没声明）。');
+        err('  说清**为什么算"明确完成、无后续"** —— 这一句就是这一轮的判定依据。');
+        return 2;
+      }
+      const who = callerOf();
+      if (dry) {
+        out('（--dry）会留痕这样一行，**不落盘**：');
+        out('  ' + JSON.stringify({
+          ev: 'handover-cmd', kind: 'no-next-declared', at: who.at, by: who.by,
+          session: who.session, root, reason: text, wrote_draft: false,
+        }));
+        out('');
+        out('⇒ --dry：不写草稿（本来就是），也**不落盘**留痕。');
+        return 0;
+      }
+      const led = appendHandoverLedger(root, {
+        ev: 'handover-cmd', kind: 'no-next-declared', at: who.at, by: who.by,
+        session: who.session, pid: who.pid, root: root,
+        reason: text,          // ← 显式声明的那句**原话**，不加工
+        wrote_draft: false,
+        next_src: '--no-next',
+      });
+      out('✓ 记下：这一轮 = **明确完成、无后续**（不写交接草稿）。');
+      out('  为什么算无后续：' + text);
+      out('  留痕：' + (led.ok ? led.path : '★ 写不进（' + led.why + '）'));
+      out('');
+      out('  ⚠ 这条命令**不消写闸欠账**（故意的）—— 要消欠账，就得真写一份交接（--next）。');
+      out('    否则"被写闸拒时随手跑一次清欠账"就会变成新的坏习惯（监督员① 点名的那个坑）。');
+      return led.ok ? 0 : 0;   // 留痕失败**不改** exit code：这一轮的声明已经生效
+    }
+
+    /* ── d. --next：真写路径 ───────────────────────────────────────────── */
+    const nextText = String(next).trim();
+    if (!nextText) {
+      err('[拒收] `--next` 后面那句话是空的（只有空白 = 没声明有后续）。');
+      err('  ⚠ 这一条就是安全阀 (3)：**未声明有后续 ⇒ 不写**。');
+      return 2;
+    }
+
+    // d-0. 工程根（**问就能问出来**，见 warden.mjs 的 findProjectRootVia 那一段）
+    const via = ctx.projVia || 'unknown';
+    const wdir = path.join(root, WARDEN_DIR_NAME);
+    if (!fs.existsSync(wdir)) {
+      err('[拒收] 这个工程根下没有 `' + WARDEN_DIR_NAME + '`：' + root);
+      err('  留痕与 record 都要写在那儿，没有它 = 这一轮没有账可挂。');
+      err('  先跑：node warden.mjs init');
+      return 2;
+    }
+
+    // d-1. 插件（复用它已有的安全阀口径；**找不到就拒收，不猜常量**）
+    const g = loadHandoverGate();
+    if (!g.ok) {
+      err('[拒收] 找不到可用的 `handover-gate.js` —— **不猜一份常量**（猜错会让覆盖保护失效）。');
+      err('  找过这些位置：');
+      for (const t of g.tried) err('    · ' + t);
+      err('  它在哪：装上 task-warden 插件的那一层；或设 `DSH_HOME` 指到你的 `.dsh`。');
+      err('  ⚠ 宁可不写，也不许用一份可能已经过期的标记串去动别人的文件。');
+      return 2;
+    }
+    const I = g.I;
+
+    // d-2. 改动清单（口径来源会**逐字**写进草稿与留痕）
+    const dirty = collectDirtyFiles(root, { files: (opt('files') || '').split(/[;,]/).map((s) => s.trim()).filter(Boolean) });
+    const filt = I.draftPaths(root, dirty.paths);
+    const allPaths = filt.paths;
+    const droppedTotal = (filt.dropped || 0) + (dirty.dropped || 0);
+
+    // d-3. 目标文件名 + 安全阀 (1)
+    const dateKey = I.localDateKey(new Date());
+    if (!dateKey) {
+      err('[拒收] 算不出今天的日期（`localDateKey` 返回空）—— **不猜**，这一轮不写。');
+      return 2;
+    }
+    const target = path.join(root, I.autoDraftName(dateKey));
+    const targetName = path.basename(target);
+    const recognized = I.isHandoverName(targetName);
+
+    let exists = false;
+    try { exists = fs.existsSync(target); } catch (e) { exists = false; }
+    if (exists) {
+      const mine = I.hasAutoMark(target);
+      if (!mine) {
+        err('[拒收] **绝不覆盖**：目标文件已经存在，而且首行不是 `' + I.HANDOVER_AUTO_MARK + '`。');
+        err('  目标：' + target);
+        err('  判据不是"文件存不存在"，而是"**它是不是机器自己写的**"。');
+        err('  读不出来（权限/编码）也当成"不是我的" ⇒ 不写（fail-closed 方向）。');
+        err('  ⇒ 这是**别人的文件**（用户/主代理手写的）。要么换个日期/换个名字，要么先自己处理它。');
+        const who0 = callerOf();
+        appendHandoverLedger(root, {
+          ev: 'handover-cmd', kind: 'refused:foreign-exists', at: who0.at, by: who0.by,
+          session: who0.session, pid: who0.pid, root: root, target: target,
+          next_src: '--next', wrote_draft: false, why: '目标已存在且无 AUTO 标记 ⇒ 绝不覆盖',
+        });
+        return 1;
+      }
+    }
+
+    // d-4. 安全阀 (2)：零改动 ⇒ 不写
+    const round = lastRoundNormalized(root, I);
+    const text = I.buildAutoDraft({
+      at: new Date().toISOString(),
+      root: root,
+      paths: allPaths,
+      dropped: droppedTotal,
+      round: round,
+      next: nextText,
+      nextSrc: '--next（显式命令 handover draft）',
+      rerun: (opt('rerun') || '').trim(),
+    });
+
+    if (!allPaths.length) {
+      err('[拒收] 这一轮的改动清单是**空的** ⇒ 不写（安全阀 (2)：零改动不写）。');
+      err('  清单来源：' + dirty.src);
+      err('  ⇒ 要准确的清单，显式给：--files "src/a.rs,crates/b/src/lib.rs"');
+      err('  ⚠ 不许退回"整个工作区都算改动" —— 那会把噪声当内容写进交接。');
+      const who0 = callerOf();
+      const led = appendHandoverLedger(root, {
+        ev: 'handover-cmd', kind: 'refused:no-dirty', at: who0.at, by: who0.by,
+        session: who0.session, pid: who0.pid, root: root, target: target,
+        next_src: '--next', wrote_draft: false,
+        dirty_src: dirty.src, why: '零改动 ⇒ 不写',
+      });
+      if (!led.ok) err('  （留痕也没写成：' + led.why + '）');
+      return 1;
+    }
+
+    // d-5. `--dry`：只打印会写什么，**不落盘**（安全阀 (4)）
+    const bytes = I.utf8ByteLength(text);
+    if (dry) {
+      out('（--dry）**不落盘**。本来会写这些：');
+      out('  目标文件： ' + target);
+      out('  文件名会被 isHandoverName() 认成交接文件吗： **' + (recognized ? '会' : '不会') + '**');
+      out('  字节数：   ' + bytes);
+      out('  清单来源： ' + dirty.src);
+      out('  排除掉：   ' + droppedTotal + ' 条（工程根外 / 在 .warden、.dsh 下）');
+      out('  本轮 record：' + (round || '（读不到最后一条）'));
+      out('  目标已存在：' + (exists ? '是（是机器自己的草稿 ⇒ 允许覆盖）' : '否（新建）'));
+      out('');
+      out('──────── 草稿正文（逐字）────────');
+      out(text.replace(/\n$/, ''));
+      out('────────────────────────────────');
+      return 0;
+    }
+
+    // d-6. 写
+    let wrote = false; let writeWhy = '';
+    try {
+      fs.writeFileSync(target, text, 'utf8');
+      wrote = true;
+    } catch (e) {
+      wrote = false; writeWhy = String((e && e.message) || e).slice(0, 160);
+    }
+
+    const who = callerOf();
+    const led = appendHandoverLedger(root, wrote
+      ? {
+        ev: 'handover-cmd', kind: 'auto-draft-written', at: who.at, by: who.by,
+        session: who.session, pid: who.pid, root: root, target: target,
+        bytes: bytes, files: allPaths.length, dropped: droppedTotal,
+        round: round || null, next_src: '--next', next: nextText,
+        dirty_src: dirty.src, recognized_as_handover: recognized, wrote_draft: true,
+      }
+      : {
+        ev: 'handover-cmd', kind: 'refused:write-failed', at: who.at, by: who.by,
+        session: who.session, pid: who.pid, root: root, target: target,
+        next_src: '--next', wrote_draft: false, why: writeWhy,
+      });
+
+    if (!wrote) {
+      err('[失败] 写不进这个文件：' + target);
+      err('  原因：' + writeWhy);
+      err('  这一轮**没有**写成交接（不许说成写成了）。');
+      if (!led.ok) err('  （留痕也没写成：' + led.why + '）');
+      return 1;
+    }
+
+    out('✓ 写好交接草稿：' + target + '（' + bytes + ' 字节）');
+    out('  文件名会被 isHandoverName() 认成交接文件吗： **' + (recognized ? '会' : '不会') + '**');
+    out('  改动文件：' + allPaths.length + ' 个（排除 ' + droppedTotal + ' 条）');
+    out('  本轮 record：' + (round || '（读不到最后一条）'));
+    out('  下一步（逐字）：' + nextText);
+    out('  留痕：' + (led.ok ? led.path : '★ 写不进（' + led.why + '）← 草稿已写成，但"跑过没跑过"这条证据缺了'));
+    if (!led.ok) {
+      out('');
+      out('  ⚠ **留痕失败** —— 记录② 要的正是"命令跑没跑过"这条可查痕迹，它现在缺了。');
+      out('    草稿是真写成了（上面那行），所以 exit code 仍是 0，**不把成功说成失败**；');
+      out('    但这件事**必须**报出来：没有留痕，C（显式命令）与 B（什么都不做）又不可区分了。');
+    }
+    return 0;
+  } catch (e) {
+    // ★ 绝不抛：兜底也给人话，不甩栈
+    err('[失败] handover 命令内部出错（已兜住，没有甩栈）：' + String((e && e.message) || e));
+    err('  这一轮**什么都没写**。请把上面这一行报给主代理。');
+    return 2;
+  }
+}
+
+/** `handover log` —— 把留痕读出来（**只读**） */
+function handoverLog(rest, ctx, out) {
+  const root = ctx.root;
+  const json = rest.includes('--json');
+  const i = rest.indexOf('--last');
+  const last = i >= 0 ? Math.max(1, Number(rest[i + 1]) || 20) : 20;
+  const p = path.join(root, WARDEN_DIR_NAME, HANDOVER_LEDGER_NAME);
+  if (!fs.existsSync(p)) {
+    out('[查不到] 没有这本留痕：' + p);
+    out('  ⚠ "查不到" **不等于** "没跑过" —— 它是"这本账还没被建起来"。');
+    out('    第一次跑 `handover draft …` 之后就有了。');
+    return 2;
+  }
+  let rows = [];
+  try {
+    rows = String(fs.readFileSync(p, 'utf8')).split(/\r?\n/).filter((l) => l.trim()).map((l) => {
+      try { return JSON.parse(l); } catch (e) { return { _bad: l.slice(0, 120) }; }
+    });
+  } catch (e) {
+    out('[失败] 读不动这本留痕：' + p + ' —— ' + String((e && e.message) || e));
+    return 2;
+  }
+  const mine = rows.filter((r) => r && r.ev === 'handover-cmd');
+  const tail = mine.slice(-last);
+  if (json) { out(JSON.stringify({ path: p, total: rows.length, cmd: mine.length, rows: tail }, null, 2)); return 0; }
+  out('留痕：' + p);
+  out('  总行数 ' + rows.length + '（其中本命令写的 ' + mine.length + ' 条）· 下面是最新 ' + tail.length + ' 条：');
+  for (const r of tail) {
+    out('  · ' + String(r.at || '?') + '  ' + String(r.kind || '?')
+      + (r.target ? '  → ' + r.target : '')
+      + (r.reason ? '  「' + r.reason + '」' : '')
+      + (r.why ? '  （' + r.why + '）' : ''));
+  }
+  const written = mine.filter((r) => r.kind === 'auto-draft-written').length;
+  const noNextN = mine.filter((r) => r.kind === 'no-next-declared').length;
+  const refused = mine.filter((r) => String(r.kind || '').startsWith('refused:')).length;
+  out('');
+  out('  ⇒ 写成交接 ' + written + ' 次 · 声明无后续 ' + noNextN + ' 次 · 被拒 ' + refused + ' 次。');
+  out('  ⚠ 「声明无后续」**不是**"任务做完了"的证据 —— 它只证明有人这么声明过。');
+  return 0;
+}
+
 function main(argv) {
   const cmd = argv[0] && !argv[0].startsWith('-') ? argv[0] : 'check';
   // 工程根按 .git 认，不按当前目录 —— 否则会话工作区里会串项目（实测踩过）
@@ -4387,6 +5942,23 @@ function main(argv) {
     }
   }
   const has = (f) => argv.includes(f);
+  if (cmd === 'handover') {
+    // ★ R10 定案（C 方案 · 显式命令）：只有显式跑这一条才写交接草稿；
+    //   默认什么都不做 —— 不跑 ⇒ 与今天一字不差；执行者 = 主代理（不是"让用户去跑"）；
+    //   攒批口径 = 轮收口时写一次（这条命令自己的语义就是"收口时跑一次"）。
+    // ⚠ runHandoverDraft 是 async ⇒ 不能把它 return 给同步的 main()（那样 exitCode 会收到
+    //   一条 Promise ⇒ ERR_INVALID_ARG_TYPE 甩栈）。这一支自己收干净：
+    //     · 这里同步返回 0（占位；真正的码由下面 .then 设到 process.exitCode）；
+    //     · 失败路径在 runHandoverDraft **内部**已经兜住了（它自己 try/catch，绝不抛）。
+    runHandoverDraft(argv.slice(1), { root, projVia: via }).then(
+      (code) => { process.exitCode = Number.isInteger(code) ? code : 2; },
+      (e) => {
+        console.log('[失败] handover 命令没兜住（这是本命令的 bug，请报给主代理）：' + String((e && e.message) || e));
+        process.exitCode = 2;
+      },
+    );
+    return 0;
+  }
 
   if (cmd === 'help' || has('--help') || has('-h')) { console.log(HELP); return 0; }
   if (cmd === 'init') {
@@ -4424,13 +5996,44 @@ function main(argv) {
       console.log(`[拒收] 没有 ${WARDEN_DIR}/SPEC.md —— 先把用户的原话逐字锁进去（append-only），再记轮次。`);
       return 2;
     }
-    const specIdsNow = parseSpec(readText(specPathForReq)).map((x) => x.id);
+    const specRowsNow = parseSpec(readText(specPathForReq));
+    const specIdsNow = specRowsNow.map((x) => x.id);
+    const specRowNow = specRowsNow.find((x) => x.id === req);
     if (!specIdsNow.includes(req)) {
       console.log(`[拒收] SPEC.md 里**没有**这条需求：${req}`);
       console.log(`  SPEC 现在有的需求号：${specIdsNow.join('、') || '（一条都没有 —— SPEC 是空的）'}`);
       console.log('  写错号的代价是"这一轮白干、而且没人知道"：先把需求按用户原话逐字锁进 SPEC.md，再记轮次。');
       console.log('  （不许"先记着、回头补 SPEC" —— 那就是把记录挂在不存在的需求上。）');
       return 2;
+    }
+
+    /**
+     * ★★ **原话逐字核对**（2026-09-25 新增；用户报的真事故：AI 改写用户原话来让自己更容易"完成"）。
+     *
+     * 事故现场：AI 把 SPEC.md 里 R3 的「原话」从「加入与替换」改写成「加入和替换」，
+     *   引号内还塞了 `**`（markdown 加粗）。check 抓到了（reject），但那是**事后**的 ——
+     *   AI 可以不跑 check、或忽略结果、或先 record 了再说。
+     *   而改写后的原话要求更宽松 ⇒ AI 更容易"完成" ⇒ **有动机改**。
+     *
+     * ⇒ 在 **record 这一步**就拦：SPEC.md 里这条需求的「原话」必须与用户真消息语料逐字一致，
+     *   否则拒收。这样 AI 改写原话**没有用** —— 即使改了 SPEC，也 record 不了、也就 done 不了。
+     *   ⚠ 语料为空时不拦（可能只是没同步，不是改写）—— 与 check 的处理一致。
+     *   ⚠ `too-short` 不拦（太短的原话由 check 的"缺原话或太短"判据管）。
+     */
+    if (specRowNow && specRowNow.quote && specRowNow.quote.length >= 8) {
+      const corpus = corpusText(root);
+      if (corpus) {
+        const vq = verifyQuote(root, specRowNow.quote, corpus);
+        if (vq.verdict !== 'verbatim' && vq.verdict !== 'too-short') {
+          console.log(`[拒收] ${req} 的「原话」在用户真消息语料里逐字找不到 —— 你改写了用户原话。`);
+          console.log(`  SPEC 里写的：${String(specRowNow.quote).slice(0, 80)}`);
+          console.log(`  判据：${vq.verdict}${vq.ratio != null ? `（相似度 ${Math.round(vq.ratio * 100)}%）` : ''}`);
+          console.log('  为什么拒收：改写用户原话 = 需求漂移。AI 改写后要求变宽松，更容易"完成" ——');
+          console.log('    这正是整套机制存在的理由。把原话改回用户逐字说过的那句话，再 record。');
+          console.log('  （如果语料还没同步：先跑 `node warden.mjs voices`，然后重试。）');
+          return 1;
+        }
+      }
     }
 
     // 脚本自己读当前值（权威）
@@ -4655,6 +6258,8 @@ function main(argv) {
     console.log('');
     console.log(`  计票：${JSON.stringify(r.counts)}`);
     console.log(`  结果：**${r.state}**`);
+    if (r.majorityBaseNote) console.log(`  ⚑ ${r.majorityBaseNote}`);
+    if (r.accountNote) console.log(`  ⚑ ${r.accountNote}`);
     if (r.selfAddressedNote) console.log(`  ⚠ ${r.selfAddressedNote}`);
     if (r.outsiderNote) console.log(`  ⚑ ${r.outsiderNote}`);
     if (r.state.includes('未决')) {
@@ -4662,6 +6267,28 @@ function main(argv) {
       console.log('  未决 → **交给脑子继续想**，不许硬定。派脑子复审，或补上缺席角色的票（带理由）。');
       if (r.missing.length) console.log(`    缺席：${r.missing.join(', ')}`);
       if (r.tied) console.log(`    平票：${JSON.stringify(r.counts)}`);
+      // ★ 过半闸（P-M2）：未决的原因也要印在"未决 → 交给脑子继续想"这一块里，
+      //   否则读的人只看到"未决"却看不到"为什么"（实测：rule 路径上这条原因原来整条是隐形的）。
+      if (r.hasMajority === false) {
+        console.log(`    未过半：最高票 ${r.winner} 只有 ${r.winCount}/${r.majorityBase}（过半要 ${r.majorityNeeded} 票）`
+          + ' —— 没过半**不许**说"多数"');
+      }
+      // ★ 判据⑤（P-M2b）：账目自相矛盾也要印在"为什么未决"这一块里（不许只活在 state 字符串里）
+      if (r.accountContradiction) {
+        console.log(`    账目自相矛盾：票的时刻 ${r.accountContradiction.voteAt} 早于规则进册时刻 ${r.accountContradiction.ruleAt}`
+          + ' —— 规则还不存在就有人投票（P-M2b）');
+      }
+      /**
+       * ★ 「未决」的消费者（**最小接线**）：上面说了"未决"，这里就必须给出**能把它解除的动作** ——
+       *   原来 `advanceRule` 只在 `rule:<id>@<n>` 路径被调，**design 议题没有任何推进/实施挂钩** ⇒
+       *   机制说了"未决"、照样通电（I60 的形状：一条不可满足的红，谁也解不掉，只能一直试）。
+       *   每条"未决"都附一条**现在就能跑、跑完这条原因就没了**的命令；
+       *   给不出可跑命令的 ⇒ 明写「这是不可满足的未决」。
+       */
+      console.log('');
+      console.log('  ★ 怎么解除（每条"未决"都附一条**现在就能跑、跑完这条原因就没了**的命令；');
+      console.log('     给不出可跑命令的，明写「这是不可满足的未决」—— 不许只印一句"交给脑子继续想"就完事）：');
+      for (const line of unresolvedFixes(topic, r)) console.log(line);
     }
     return r.state.includes('未决') ? 1 : 0;
   }
@@ -4811,7 +6438,7 @@ function main(argv) {
       const trigger = opt('trigger');
       if (trigger !== undefined && !Object.hasOwn(BRAIN_TRIGGERS, trigger)) {
         console.log(`[用法] --trigger 只能是 ${BRAIN_TRIGGER_IDS.join(' | ')}（你说的：${trigger}）`);
-        console.log('  默认**不传** = 派第 1 个脑子（默认就 1 个）；只有触发条件成立时才传它加派第 2 个。');
+        console.log('  **不传 --trigger = 不派脑子**（随手小改动不必审）；只有触发条件成立时才传它派脑子。');
         return 2;
       }
       const p = path.isAbsolute(a) ? a : path.join(root, a);
@@ -4901,9 +6528,9 @@ function main(argv) {
     console.log('');
     // ⚠ 整句放在**一个字符串里**（原来拆成两行 console.log）：拆断之后，
     //   脱敏脚本按 `「…」` 整块替换时会把中间的 `');` + `console.log('` 一起吃掉 ⇒ 语法坏掉。
-    console.log('扩编规则（用户 2026-09-2x 逐字：「（用户原话已隐去 —— 公开版不留逐字）」）：');
-    console.log('  · **默认只派 1 个** —— `单审` 是正常态，不是欠账；');
-    console.log(`  · 只有 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才加派第 2 个，`);
+    console.log('扩编规则（用户 2026-09-25：「写完代码复查不应该那么久」—— 默认不审，只在触发条件成立时才派）：');
+    console.log('  · **默认不派脑子** —— 随手小改动不必审；');
+    console.log(`  · 只在 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才派脑子，`);
     console.log('    并用 `brain record --trigger <哪一种>` 把理由记下来；');
     console.log('  · 2 个冲突 → 加 1 个裁判（--role judge）；裁决前不许定稿。');
     return st.blocking ? 1 : 0;
@@ -5009,14 +6636,32 @@ function main(argv) {
   if (cmd === 'voices') {
     const dir = path.join(root, WARDEN_DIR);
     if (!fs.existsSync(dir)) { console.log('[用法] 先跑：node warden.mjs init'); return 2; }
-    const kw = argv.slice(1).filter((a) => !a.startsWith('--')).join(' ');
+    /**
+     * ★ R37：取数**默认只扫本窗口**（认不出本窗口 ⇒ 拒收 exit 2，不替你猜）。
+     *   `--all-windows` 是显式扫全集的那条路；`--session <id>` 显式指定一本账。
+     */
+    const vScope = resolveWindowScope(root, {
+      session: (() => { const i = argv.indexOf('--session'); return i >= 0 ? argv[i + 1] : undefined; })(),
+      allWindows: argv.includes('--all-windows'),
+    });
+    if (vScope.mode === 'unknown') { console.log(unknownWindowNotice(vScope, 'voices')); return 2; }
+    // ⚠ 位置参数要跳过带值 flag 的**值**，否则 `--session xxx` 的值会被当成关键词去查（静默查错东西）
+    const kw = positionalArgs(argv.slice(1), ['--session']).join(' ');
     if (kw) {
-      const hits = searchVoices(dir, kw);
-      console.log(`${ROLE_STAMP.keeper} 窗口传递层 · 查「${kw}」→ ${hits.length} 条\n`);
+      const scoped = vScope.mode === 'all' ? null : vScope.session;
+      const pool = loadVoices(dir, scoped ? { session: scoped } : {}).filter(voiceIsUser);
+      const wins = new Set(pool.map((v) => String(v.session ?? '')));
+      const hits = searchVoices(dir, kw, scoped ? { session: scoped } : {});
+      console.log(`${ROLE_STAMP.keeper} 窗口传递层 · 查「${kw}」→ ${hits.length} 条`);
+      console.log(`  窗口口径：${vScope.mode === 'all' ? `全集（${vScope.why}）` : `只扫本窗口 ${scoped}（${vScope.why}）`}`
+        + ` —— 查了 **${wins.size} 个窗口**、${pool.length} 条原话`);
+      if (vScope.mode !== 'all') console.log('  （别的窗口不在这次范围里 —— 看全集：node warden.mjs voices "关键词" --all-windows）');
+      console.log('');
       if (!hits.length) {
         // 「0 条命中」不许说成"用户没说过这个" —— 那也是"没查到东西 ≠ 查了没问题"
         const vsV = voiceStaleness(root, dir);
         console.log('  （这次没查到 —— **不等于"用户没说过"**。可能是关键词不对，也可能 VOICE 快照落后了。）');
+        if (vScope.mode !== 'all') console.log('  （也可能这句是**别的窗口**说的：加 --all-windows 再查一次。）');
         if (vsV.stale) console.log(`  ${voiceStaleWarning(vsV)}`);
       }
       for (const h of hits) {
@@ -5028,11 +6673,52 @@ function main(argv) {
       return 0;
     }
     const rebuild = argv.includes('--rebuild');
-    const r = syncVoices(root, dir, { rebuild });
+    /**
+     * ★★ `mergeAggregate: true` —— **只有 `voices` 命令走这条**（硬伤 A / B 的产品侧修法）。
+     *   scoped 时把本窗口的原话**追加**进汇总本（只增不改，永不 rebuild）。
+     *   `ask` 走同一套 `syncVoices` 但**不传**这个开关（它按设计不写汇总本，L42 ⑦ 钉着）。
+     */
+    const r = syncVoices(root, dir, { rebuild, session: vScope.session, allWindows: vScope.mode === 'all', mergeAggregate: true });
+    /**
+     * ★★ **拒收路径**：这次 `--rebuild` 会把一本**非空**的账清成 0 条 ⇒ 一个字节都不写。
+     * 为什么必须拒收而不是"照做、只提醒"：那是**不可逆**的（原话账没有第二份），
+     * 而"扫到 0 条"**区分不了**「日志被归档/移走」与「这个窗口真的没说过话」这两件事 ——
+     * 区分不了就不许替用户决定。exit 3 = 数据安全拒收（2 留给用法/环境错，1 留给 check 不通过）。
+     */
+    if (r.refused) {
+      console.log(`${ROLE_STAMP.keeper} 窗口传递层 · --rebuild —— **拒收：没有写任何东西**\n`);
+      console.log(`  ${r.refused.why}`);
+      console.log(`  （目标文件里的 ${r.refused.rowsBefore} 行**原样还在** —— 盘上真实条数就是 ${r.total} 条，没有被改成 0。）\n`);
+      console.log('  为什么不照做："扫到 0 条"有两种原因，**这次分不出来**：');
+      console.log('    ① 会话日志**不可用**（被归档 / 轮转 / 移走 / 换了机器）⇒ 盘上其实还在，只是这次扫不到；');
+      console.log('    ② 这个窗口**真的**没说过话 ⇒ 这本账本来就该是空的。');
+      console.log('  把 ① 当成 ② 写下去，就是**不可逆**地删掉一本真账（实测事故：27 行 → 243 B 的空壳）。\n');
+      console.log('  怎么办（两条路，都写出来）：');
+      console.log(`    · 先确认日志还在，再重跑：node warden.mjs voices${r.session ? ` --session ${r.session}` : ''} --rebuild`);
+      console.log('    · 确要清空这本账：**手工**删/改那个文件（你的手比我的脚本可靠，而且你担得起这个后果）');
+      console.log(`    文件：${r.file}`);
+      return 3;
+    }
     console.log(`${ROLE_STAMP.keeper} 窗口传递层${rebuild ? '（已按当前规则重建）' : '已更新'}`);
-    console.log(`  新增 ${r.added} 条，累计 ${r.total} 条 → ${r.file}`);
-    console.log(`  跳过：子代理会话 ${r.skipped.subagent} 个 · 没写过磁盘的会话 ${r.skipped.noDisk} 个`);
-    const all = loadVoices(dir);
+    // 「累计 N 条」= **盘上真实的条数**（`r.rowsOnDisk`），不是"本窗口那本 ∪ 汇总本里属于它的行"
+    console.log(`  新增 ${r.added} 条，累计 ${r.total} 条（**盘上真实条数**）→ ${r.file}`);
+    // 「扫了几个窗口」必须明写（R37）
+    console.log(`  窗口口径：${r.scoped ? `只扫本窗口 ${r.session}（${vScope.why}）` : `全集（${vScope.why}）`}`
+      + ` —— 有原话的窗口 **${r.windowsScanned} 个**（共见到 ${r.sessionsSeen} 个会话）`);
+    // 三个"跳过"类目**互不重叠**（子代理不再被算成"别的窗口"）—— 数字必须能相加对上
+    console.log(`  跳过：别的窗口 ${r.skipped.otherWindow} 个 · 子代理会话 ${r.skipped.subagent} 个 · 没写过磁盘的会话 ${r.skipped.noDisk} 个`);
+    if (r.scoped) {
+      /**
+       * ★ 硬伤 A/B：这句话原来写的是「全工程的汇总本在 .warden/VOICE.jsonl（只增不改，不覆盖）」，
+       *   读起来像"scoped 不碰汇总本" —— 那正是闸门静默失效的原因。现在**如实报**并了几条。
+       */
+      const ag = r.aggregate;
+      console.log(`  ★ 这本是**本窗口单独的账**；汇总本 .warden/VOICE.jsonl **也同步更新了**`
+        + `（只增不改，永不 rebuild/清空）：这次并进 ${ag ? ag.added : 0} 条，汇总本现在 ${ag ? ag.rows : '?'} 条。`);
+      console.log('    为什么要并：check 的「原话认领闸」读的是汇总本 —— 不并，正常流下那条硬失败就**静默不响**（判定一个字没动，改的是取数）。');
+      console.log('    看全集：node warden.mjs voices --all-windows   ｜   收尾落总账：node warden.mjs ledger flush');
+    }
+    const all = loadVoices(dir, vScope.mode === 'all' ? {} : { session: vScope.session });
     console.log('\n最近 5 条：');
     for (const v of all.slice(-5)) {
       const d = v.at ? new Date(v.at).toLocaleString('zh-CN') : '?';
@@ -5044,26 +6730,81 @@ function main(argv) {
     // 提问闸门（机械那一半）：已经答过的不许再问；能在文档里查到的，先去查。
     const dir = path.join(root, WARDEN_DIR);
     if (!fs.existsSync(dir)) { console.log('[用法] 先跑：node warden.mjs init'); return 2; }
-    const q = argv.slice(1).filter((a) => !a.startsWith('--')).join(' ');
-    // 记"脑子"那一层的判决
+    const opt = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+    /**
+     * ⚠ 问题文本要用 `positionalArgs` 取（跳过带值 flag 的**值**）——
+     *   否则 `ask "问题" --session session-xxx` 会把**会话 id 当成问题的一部分**去查（静默查错东西）。
+     */
+    const q = positionalArgs(argv.slice(1), ['--session', '--verdict', '--reason']).join(' ');
+    // 记"脑子"那一层的判决（**先于窗口口径**：这是一笔记账，不该被"认不出窗口"挡住）
     const vi = argv.indexOf('--verdict');
     const ri = argv.indexOf('--reason');
     if (vi >= 0 && argv[vi + 1]) {
       const p = path.join(dir, 'QUESTIONS.jsonl');
       const verdict = argv[vi + 1];
       if (!['ask', 'decide'].includes(verdict)) { console.log('[用法] --verdict 只能是 ask（该问）或 decide（该自己定）'); return 2; }
-      fs.appendFileSync(p, JSON.stringify({ at: new Date().toISOString(), resolved: verdict, reason: ri >= 0 ? argv[ri + 1] : '', question: q }) + '\n', 'utf8');
+      /**
+       * ★★ **判决必须能和某个问题对上** —— 硬伤 D 的修法（判据三条，缺一不可，全都不许静默）：
+       *   ① 命令行给了问题 → 用它；
+       *   ② 没给 → 从 QUESTIONS.jsonl 里**最近一条还没判决的问题**取（那正是这条判决的对象），
+       *      并**明着打印**它是从哪一条取的（带时间戳）—— 不是静默补一个空值；
+       *   ③ 两处都没有 → **拒收 exit 2**，一个字节都不写。
+       * `--reason` 同理硬拒：没写理由的判决既不能被复核、也不能被推翻 —— 同一个病。
+       */
+      let question = q;
+      let questionFrom = '命令行';
+      if (!question) {
+        const pend = lastPendingQuestion(p);
+        if (pend) { question = pend.question; questionFrom = `QUESTIONS.jsonl 里最近一条还没判决的问题（${pend.at}）`; }
+      }
+      if (!question) {
+        console.log('[用法] --verdict 必须能对上**一个具体问题** —— 这次既没在命令行给问题，');
+        console.log('        QUESTIONS.jsonl 里也没有「还没判决的问题」可对。');
+        console.log('        写法：node warden.mjs ask "你想问用户的问题" --verdict decide|ask --reason "…"');
+        console.log('        为什么硬拒：空 question 会让这条判决**无法与任何问题对上**（实测落盘过 {"question":""}），');
+        console.log('        那不是修复，是"静默的空输入 + exit 0"。');
+        return 2;
+      }
+      const reason = String(ri >= 0 ? argv[ri + 1] : '').trim();
+      if (!reason) {
+        console.log('[用法] --verdict 必须写 --reason "…" —— 没写理由的判决记录既不能被复核、也不能被推翻');
+        console.log('        （同一个病："静默的空输入 + exit 0"）。');
+        return 2;
+      }
+      fs.appendFileSync(p, JSON.stringify({
+        at: new Date().toISOString(), resolved: verdict, reason, question, questionFrom,
+      }) + '\n', 'utf8');
+      console.log(`已记：判决对象 = 「${question}」`);
+      console.log(`  （这个问题来自：${questionFrom}）`);
       console.log(verdict === 'ask'
         ? '已记：该问用户。记得按「你要的 vs 我给的」+ 含「照原样做」的选项来问。'
         : '已记：该自己定。把结论和依据写进交付，别拿它去占用户的注意力。');
       return 0;
     }
     if (!q) { console.log('[用法] node warden.mjs ask "你想问用户的问题"'); return 2; }
-    syncVoices(root, dir);
-    const hits = searchVoices(dir, q);
-    const ranked = rankVoices(dir, q);
+    /**
+     * ★★ R37：`ask` 也**按窗口收窄**。两个病一起治：
+     *   ① 取数：原来 `searchVoices`/`rankVoices` 拿几十个窗口混在一起的 VOICE 去查 ⇒
+     *      **别的窗口说过的话**会被当成"用户已经答过"，把本窗口的问题拦下来（污染的正源之一）；
+     *   ② 写数：原来无参 `syncVoices(root, dir)`（= 扫**全集**）**顺手写汇总本** ——
+     *      在别的窗口的原话账上，这个动作本身就是污染。⇒ 现在跟着窗口口径走：
+     *      scoped 只写本窗口那一本，`--all-windows` 才动汇总本（与 `voices` 完全同一套）。
+     */
+    const aScope = resolveWindowScope(root, { session: opt('session'), allWindows: argv.includes('--all-windows') });
+    if (aScope.mode === 'unknown') { console.log(unknownWindowNotice(aScope, 'ask')); return 2; }
+    const aSession = aScope.mode === 'all' ? '' : String(aScope.session ?? '');
+    syncVoices(root, dir, { session: aSession || undefined, allWindows: aScope.mode === 'all' });
+    const hits = searchVoices(dir, q, aSession ? { session: aSession } : {});
+    const ranked = rankVoices(dir, q, 5, aSession ? { session: aSession } : {});
     const docs = findInDocs(root, q);
+    const aPool = loadVoices(dir, aSession ? { session: aSession } : {}).filter(voiceIsUser);
+    const aWinCount = new Set(aPool.map((v) => String(v.session ?? ''))).size;
     console.log(`${ROLE_STAMP.gate} 提问闸门 · 机械检查\n`);
+    // 「这次取数来自几个窗口」必须明写（R37）—— 不写窗口数，读者没法判断这次查的是哪本账
+    console.log(`窗口口径：${aScope.mode === 'all' ? `全集（${aScope.why}）` : `只扫本窗口 ${aSession}（${aScope.why}）`}`
+      + ` —— **这次取数来自 ${aWinCount} 个窗口**、${aPool.length} 条真用户原话`);
+    if (aScope.mode !== 'all') console.log('  （别的窗口不在这次范围里 —— 看全集：node warden.mjs ask "问题" --all-windows）');
+    console.log('');
     console.log(`问题：${q}\n`);
     // 机械层只能"提示"，判不准 —— 这一点必须诚实，真正的判断归"脑子"那一层
     let blocked = false;
@@ -5104,6 +6845,7 @@ function main(argv) {
       console.log('  ② 答案能不能自己查/自己定？该自己定就给结论和依据；');
       console.log('  ③ 非问不可的话，怎么问才对（必须给"你要的 vs 我给的"+含"照原样做"的选项）。');
       console.log('  审完用：node warden.mjs ask --verdict decide|ask --reason "…" 记下判决。');
+      console.log('  （硬伤 D：判决必须能对上**一个具体问题** —— 命令行不给就从最近一条待决问题取，都没有则拒收 exit 2。）');
     }
     return blocked ? 1 : 0;
   }
@@ -5261,6 +7003,19 @@ function main(argv) {
     for (const g of gap) console.log(`      ✗ 没有归宿：${hhmm(g.v.at)} #${g.v.seq} ${cut(g.v.text, 40)}`);
     if (gap.length) console.log('      （这几条原话**没有归宿、也就没有对应的结果行** —— 这就是对账里的缺口，别当它不存在。）');
     writeRecon('results', { gaps: gap.length, tally: { done: tally.done, partial: tally.partial, doing: tally.doing, todo: tally.todo } });
+    /**
+     * ★ R37 第 4 条「**未做完的写入总账本**」—— 收尾这一刀必须自己落，不许等人记得。
+     *   **不做完就静默消失 = 事故**，所以收尾跑完顺手把本窗口还没做完的项写进总账
+     *   （`ledger flush` 是同一个函数的显式入口）。
+     *   ⚠ 只有知道本窗口时才写：不知道"这本账记到谁头上"就写，等于瞎记。
+     */
+    if (owner) {
+      const lId = ledgerIdOf(root);
+      const fl = flushWindowToLedger(root, dir, { session: owner, ledgerId: lId });
+      console.log(`  ▸ 总账本：本窗口**还没做完**的项 → 写了 ${fl.added} 条 → ${path.join(dir, LEDGER_FILE)}`);
+      for (const it of fl.items) console.log(`      ○ ${lId}#${it.req}  ${it.title || ''} —— ${it.why}`);
+      if (!fl.added) console.log('      （本窗口没有未做完的项 ⇒ 这一笔是**空的**；"空"≠"都做完了"）');
+    }
     console.log(`  （全历史主表：node warden.mjs report → ${path.join(dir, 'REPORT.md')}）`);
     return 0;
   }
@@ -5624,6 +7379,28 @@ function main(argv) {
     if (!fs.existsSync(dir)) { console.log('[用法] 先跑：node warden.mjs init'); return 2; }
     const sub = argv[1];
     const opt = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+    /**
+     * ★★ R37：`claims` 的取数**按窗口收窄**，与 `voices` / `needs` / `results` 同一套口径。
+     *
+     * 事故原样：`claims`（默认）在任何窗口都读同一本汇总本 ⇒
+     *   `未认领 197 / 共 389`，与真原件**逐字节相同** —— 也就是说 `claims` / `ask` 这两条路
+     *   **逐字节没治**，而它们正是"污染的正源"。
+     *
+     * 三条规矩：
+     *   ① 默认只扫本窗口；认不出本窗口 ⇒ **拒收（exit 2）**，不替你猜（静默按全集扫就是污染本身）；
+     *   ② 要全集必须**显式** `--all-windows`；
+     *   ③ 输出里**必印"这次取数来自 N 个窗口"**（只报条数不报窗口数，读者没法判断口径）。
+     *
+     * ⚠ **全局水位线只在扫全集时才设**（和 `voices` 的水位线同一个理由）：
+     *   scoped 一次只覆盖一个窗口，拿它去设那条**全局**水位线是**假证据**。
+     *   `check` 走的仍是**全集**口径（`claimsStatus(root,dir)` 不带 session）⇒ 判定一个字没改。
+     */
+    const cScope = resolveWindowScope(root, { session: opt('session'), allWindows: argv.includes('--all-windows') });
+    if (cScope.mode === 'unknown') { console.log(unknownWindowNotice(cScope, 'claims')); return 2; }
+    const cSession = cScope.mode === 'all' ? '' : String(cScope.session ?? '');
+    const scopeLine = (cl) => `  窗口口径：${cScope.mode === 'all' ? `全集（${cScope.why}）` : `只扫本窗口 ${cSession}（${cScope.why}）`}`
+      + ` —— **这次取数来自 ${cl.windows} 个窗口**、${cl.total} 条真用户原话`
+      + (cScope.mode === 'all' ? '' : '（别的窗口不在这次范围里：node warden.mjs claims --all-windows）');
 
     if (sub === 'add') {
       const specIds = fs.existsSync(path.join(dir, 'SPEC.md')) ? parseSpec(readText(path.join(dir, 'SPEC.md'))).map((s) => s.id) : [];
@@ -5633,14 +7410,17 @@ function main(argv) {
       console.log(`  原话：${oneLine(r.voice.text, 60)}`);
       if (r.record.why) console.log(`  依据：${r.record.why}`);
       console.log(`  （append-only 追加到 ${path.join(dir, CLAIMS_FILE)}）`);
-      const cl = claimsStatus(root, dir, { createWatermark: false });
+      const cl = claimsStatus(root, dir, { createWatermark: false, session: cSession || undefined });
       console.log(`  现在：${claimsSummary(cl)}${cl.after.length ? ` · **水位线之后仍有 ${cl.after.length} 条未认领**` : ''}`);
+      console.log(scopeLine(cl));
       return 0;
     }
 
     if (sub === 'why') {
       const voice = opt('voice');
       if (!voice) { console.log('[用法] node warden.mjs claims why --voice "<session-id>#20"'); return 2; }
+      // ★ 显式 `--voice` 是**按指针查**（不是按窗口取数）：指针可能指向别的窗口，
+      //   所以这里仍按**全集**解析。窗口口径只约束"列出来的是谁说的话"，不约束"我指名道姓要看的这一条"。
       const voices = loadVoices(dir);
       const v = findVoiceByRef(voices, voice);
       if (!v) {
@@ -5674,12 +7454,22 @@ function main(argv) {
       return 0;
     }
 
-    // 默认：列出**未认领**的真用户消息
-    const cl = claimsStatus(root, dir);
+    // 默认：列出**未认领**的真用户消息（★ 按窗口口径收窄；要全集必须显式 --all-windows）
+    const cl = claimsStatus(root, dir, { createWatermark: cScope.mode === 'all', session: cSession || undefined });
     const all = argv.includes('--all');
     console.log(`${ROLE_STAMP.keeper} 原话认领 · 未认领的真用户消息\n`);
+    console.log(scopeLine(cl));
+    if (cScope.mode !== 'all') {
+      console.log('  （全局水位线**这次没动** —— 它只在 `--all-windows` 时才设：拿"一个窗口"去设全局水位线是假证据）');
+    }
+    console.log('');
     if (!cl.total) {
-      console.log(`  ${WARDEN_DIR}/VOICE.jsonl 里一条用户原话都没有（或还没建）—— 先跑：node warden.mjs voices`);
+      // 「0 条」不许读成"没问题"/"用户没说过"（A6）—— 三种原因都要说出来
+      console.log('  **这次取数 0 条** —— 但这**不等于"用户没说过话"**：');
+      console.log(cScope.mode === 'all'
+        ? '    · 汇总本可能还没建/是空的：先跑 node warden.mjs voices --all-windows'
+        : `    · 本窗口（${cSession}）在这本账里还没有原话：先跑 node warden.mjs voices --session ${cSession}`);
+      if (cScope.mode !== 'all') console.log('    · 也可能这些原话是**别的窗口**说的：node warden.mjs claims --all-windows');
       console.log('\n未认领 0 / 共 0');
       return 0;
     }
@@ -5726,9 +7516,36 @@ function main(argv) {
   }
   if (cmd === 'quotes') {
     // 归属核查：文档/源码里"把某句话归给用户"的写法，逐句拿去会话日志里验。
-    const files = argv.slice(1).filter((a) => !a.startsWith('--'));
-    const { corpusSize, results, scannedFiles } = runQuoteAudit(root, { files });
+    const files = positionalArgs(argv.slice(1), ['--session']);
+    // ★ R37：引文核对的**取数一律全集**（这是"回退"，不是"再收窄"）—— 口径见下面那段。
+    const givenScopeFlags = ['--session', '--all-windows'].filter((f) => argv.includes(f));
+    const { corpusSize, results, scannedFiles, windowStats } = runQuoteAudit(root, { files });
     console.log(`${ROLE_STAMP.quotes} 归属核查\n`);
+    /**
+     * ★★ 口径如实写成**全集** —— **这是回退**：
+     *   上一版（P-M5）把引文语料按窗口收窄，结果一条"逐字为真、来自别的窗口"的用户原话被判
+     *   「★查无实据」(exit 1)，而"给一个不存在的窗口 id"时还会打印「用户真语料来自 **0 个窗口**、0 字」
+     *   **同时**报「✅ 逐字对上（7 处）」—— 两个数字互相打架（口径谎报）。
+     *   ⇒ 语料一律**全集**，这里也**只许写"全集"**。
+     *   「扫了几个窗口」仍然要明写（R37 的可读性要求保留）；口径与 `voices` 一致：
+     *   **只有 `session-*` 才是用户窗口**，裸 uuid 是子代理会话，单独报出来。
+     */
+    console.log(`窗口口径：**全集**（引文核对按全历史取数，SPEC 的引文本就跨窗口）`
+      + ` —— 真用户语料来自 **${windowStats.windows} 个窗口**（共见到 ${windowStats.sessionsSeen} 个会话，`
+      + `其中子代理会话 ${windowStats.subagentSessions} 个 —— 子代理会话**不算窗口**；`
+      + `按口径跳掉别的窗口 ${windowStats.skippedOtherWindows} 个）`);
+    if (givenScopeFlags.length) {
+      // 显式传了旗标却按全集取数 —— **不许静默忽略**（静默是这个项目最坏的一类行为）
+      console.log(`  ⚠ 你传了 ${givenScopeFlags.join(' / ')}，但**本命令不按窗口收窄**：`
+        + `引文核对一律按**全集**取数（收窄会把别的窗口说过的真话判成"查无实据"）。`);
+      console.log('     要看"本窗口说过什么"：node warden.mjs voices   ｜   要落总账：node warden.mjs ledger flush');
+    }
+    if (windowStats.noDiskWindows) {
+      // 口径差异必须说出来，否则 42 vs 38 会被读成"某个命令算错了"
+      console.log(`  （其中 **${windowStats.noDiskWindows} 个没写过磁盘**：它们的话在本命令的语料里，`
+        + `但按用户要求**不进** voices 那本账 —— 所以 quotes 与 voices 的窗口数本来就会差这么多。）`);
+    }
+    console.log('');
     /**
      * **「没查到东西」≠「查了没问题」**（实测事故 A6）。
      * 原来传一个不存在的路径 → 扫了 0 处 → 打印"结论：没有发现查无实据的归属" → exit 0。
@@ -5751,7 +7568,7 @@ function main(argv) {
     }
     const bucket = { verbatim: [], 'quoted-from-ai': [], paraphrase: [], unfounded: [], 'too-short': [] };
     for (const r of results) (bucket[r.verdict] ??= []).push(r);   // 未知判决不再炸整个报告（踩过：新判决没进桶 → TypeError）
-    console.log(`扫了 ${scannedFiles} 个文件、${results.length} 处「归给用户」的写法；用户真消息语料 ${fmtInt(corpusSize)} 字（去空白后）\n`);
+    console.log(`扫了 ${scannedFiles} 个文件、${results.length} 处「归给用户」的写法；用户真消息语料 ${fmtInt(corpusSize)} 字（去空白后，来自 ${windowStats.windows} 个窗口）\n`);
     // 权威层体检（L10）：VOICE 快照落后时，先把话说清楚，别让读者把结论当准的
     const vsQ = voiceStaleness(root, path.join(root, WARDEN_DIR));
     if (vsQ.stale) {
@@ -5860,6 +7677,189 @@ function main(argv) {
     console.log(r.msg);
     return r.ok ? 0 : 2;
   }
+  if (cmd === 'ledger') {
+    /**
+     * ★ **总账本**（R37）：跨窗口可见的一本 —— **未做完项的汇总 + 各窗口完成状态**。
+     * 用户逐字：「（用户原话已隐去 —— 公开版不留逐字）」
+     *
+     * 每条**必有** `window`（会话 id）+ `projectRoot`（工程根）+ `at`（时间）⇒ 别的窗口读得出是谁的、什么时候。
+     * `ledger`（账本标识，见 ledgerIdOf）把 R# 钉在**它自己那本账**里 —— **R# 不跨账**：
+     *   实测隔壁窗口有 R37/R38，本窗口也有 R37，**指的不是同一件事**；
+     *   跨账引用必须写成 `<账本id>#R37`（写裸 R# 会被拒收）。
+     */
+    const dir = path.join(root, WARDEN_DIR);
+    if (!fs.existsSync(dir)) { console.log('[用法] 先跑：node warden.mjs init'); return 2; }
+    const sub = argv[1] && !argv[1].startsWith('-') ? argv[1] : 'show';
+    const opt = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+    const lId = ledgerIdOf(root);
+    const stamp = ROLE_STAMP.keeper;
+    const scope = resolveWindowScope(root, { session: opt('session'), allWindows: argv.includes('--all-windows') });
+    const own = scope.mode === 'all' ? '' : String(scope.session ?? '');
+    const refOf = (x) => (x.ledger === lId ? x.req : `${x.ledger}#${x.req}`);
+    const badLine = (bad) => `  ⚠ ${bad.length} 行**坏记录**（读不动）—— 不许当成"没有这些记录"（会少算"未做完"）：\n`
+      + bad.slice(0, 5).map((b) => `      第 ${b.n} 行：${b.why}`).join('\n');
+
+    if (sub === 'ids') {
+      const st = ledgerState(dir);
+      const ids = [...new Set([lId, ...st.items.map((x) => x.ledger)])];
+      console.log(`${stamp} 总账本 · 账本标识（**R# 不跨账**）\n`);
+      console.log(`  本工程：${lId}     工程根 ${path.resolve(root)}`);
+      for (const x of ids.filter((i) => i !== lId)) {
+        const n = st.items.filter((i) => i.ledger === x).length;
+        console.log(`  别的账本：${x}   （${n} 项）★ 引用它必须写成 ${x}#R37 —— 否则"同号不同物"会被静默错认`);
+      }
+      if (!ids.filter((i) => i !== lId).length) console.log('  （总账里还没出现过别的账本）');
+      if (st.bad.length) console.log('\n' + badLine(st.bad));
+      return 0;
+    }
+
+    if (sub === 'add' || sub === 'done' || sub === 'reopen') {
+      if (!own) { console.log(unknownWindowNotice(scope, `ledger ${sub}`)); return 2; }
+      const reqRaw = String(opt('req') ?? '').trim();
+      const parsed = parseLedgerReq(reqRaw);
+      if (!parsed) { console.log(`[用法] --req 只能是 R# 或 <账本id>#R#（收到「${reqRaw}」）`); return 2; }
+      const inLedger = String(opt('in') ?? '').trim();
+      const target = inLedger || parsed.ledger || lId;
+      // ★ R# 不跨账：往**别的**账本里记时，需求号必须带账本标识
+      if (target !== lId && !parsed.ledger) {
+        console.log(`[拒收] **R# 不跨账** —— 「${parsed.req}」只对账本 ${lId} 有效。`);
+        console.log(`  要往别的账本里记，必须带账本标识：--req ${target}#${parsed.req}`);
+        console.log('  （实测：隔壁窗口有 R37/R38，本窗口也有 R37 —— 编号一样，**指的不是同一件事**。）');
+        return 2;
+      }
+      if (parsed.ledger && parsed.ledger !== target) {
+        console.log(`[拒收] --req 里的账本（${parsed.ledger}）和 --in（${target}）不一致 —— 不猜。`);
+        return 2;
+      }
+      let status = sub === 'done' ? 'done' : sub === 'reopen' ? 'reopen' : String(opt('status') ?? 'open').trim();
+      if (status === 'reopen' && sub === 'add' && opt('status') !== 'reopen') status = 'open';
+      if (!['open', 'done', 'reopen'].includes(status)) {
+        console.log('[用法] --status 只能是 open / done / reopen（重开请用 `ledger reopen --req R#`，别用 add 蒙）');
+        return 2;
+      }
+      /**
+       * ★ `reopen` 是**显式**把 done 打回 open 的唯一入口（见 ledgerState 的"done 是粘的"）。
+       *   为什么要它：否则"手滑一次 flush"就能把别的窗口标的 done 抹掉；
+       *   但完全不给人重开的门又会让 done 变成不可逆的谎 —— 所以门留着，只是必须**说出口**。
+       */
+      if (status === 'reopen') {
+        const st = ledgerState(dir);
+        const cur = st.items.find((x) => x.ledger === target && x.req === parsed.req);
+        /**
+         * ★★ `!cur` ⇒ **拒收**（实测：`ledger reopen --req R2`（R2 从来不存在）→
+         *   「⟲ 已显式重开」+ **EXIT=0** ⇒ 在总账里造出一条**幽灵欠账**）。
+         * 为什么必须拒：`reopen` 写下的每一笔都会被别的窗口当成"这里有一件没做完的事" ——
+         *   凭空造欠账比漏记更坏（没法收敛）。
+         */
+        if (!cur) {
+          console.log(`[拒收] ${target}#${parsed.req} 在总账里**从来没有过** —— 没什么可重开的。`);
+          console.log('  重开（reopen）只能用在**已经 done** 的项上（它在总账里的状态是 done，才谈得上"打回未做完"）。');
+          console.log(`  你是不是想记一件新的事？那是：node warden.mjs ledger add --req ${parsed.req} --status open`);
+          console.log(`  （总账里现有 ${st.items.length} 项 —— 看：node warden.mjs ledger show）`);
+          return 2;
+        }
+        if (String(cur.status) !== 'done') {
+          console.log(`[拒收] ${target}#${parsed.req} 现在**不是** done（是 ${cur.status}）—— 没什么可重开的。`);
+          return 2;
+        }
+      }
+      const at = new Date().toISOString();
+      const rec = {
+        at, ledger: target, req: parsed.req, title: String(opt('title') ?? ''),
+        status, window: own, projectRoot: path.resolve(root), note: String(opt('note') ?? ''),
+      };
+      const f = appendLedger(dir, rec);
+      console.log(`${stamp} 总账本 · 已记一笔 → ${f}`);
+      console.log(`  ${target}#${rec.req}  [${status}]   窗口 ${own}   工程根 ${path.resolve(root)}   ${at}`);
+      console.log(status === 'done'
+        ? '  ✓ 别的窗口现在看得见「这件做完了」：node warden.mjs ledger show --all-windows'
+        : status === 'reopen'
+          ? '  ⟲ 已显式重开（把它打回"未做完"）—— 别的窗口看得见是谁重开的、什么时候。'
+          : '  · 还没做完 —— 收尾时会被自动写进总账（node warden.mjs results / ledger flush）。');
+      return 0;
+    }
+
+    if (sub === 'flush' || sub === 'close') {
+      if (!own) { console.log(unknownWindowNotice(scope, `ledger ${sub}`)); return 2; }
+      const r = flushWindowToLedger(root, dir, { session: own, ledgerId: lId, note: String(opt('note') ?? '') });
+      console.log(`${stamp} 总账本 · 收尾：把本窗口**还没做完**的项写进去 → ${path.join(dir, LEDGER_FILE)}`);
+      console.log(`  窗口 ${own} → 写了 ${r.added} 条（**不做完就静默消失 = 事故**，所以这一笔是必须的）`);
+      for (const it of r.items) console.log(`    · ${lId}#${it.req}  ${it.title || ''}  —— ${it.why}`);
+      if (!r.added) {
+        console.log('  （本窗口没有未做完的项 ⇒ 这一笔是**空的**：要么总账里都已 done，要么本窗口还没开过工。）');
+        console.log('  ⚠ "空"≠"都做完了"：它只说明**总账里没有本窗口的欠账**。');
+      }
+      return 0;
+    }
+
+    if (sub === 'show') {
+      const st = ledgerState(dir);
+      const all = argv.includes('--all-windows');
+      const items = all ? st.items : st.items.filter((x) => x.ledger === lId);
+      // `--json`：给机器读（判据可机检）。只输出**我们自己的叶子字段**，不 dump 任何活对象。
+      if (argv.includes('--json')) {
+        console.log(JSON.stringify({
+          ledgerId: lId, projectRoot: path.resolve(root), allWindows: all,
+          entries: st.entries.length, bad: st.bad.length,
+          items: items.map((x) => ({
+            ref: refOf(x), ledger: x.ledger, req: x.req, status: x.status, title: x.title ?? '',
+            window: x.window, windows: x.windows, projectRoot: x.projectRoot, at: x.at, note: x.note ?? '',
+            writes: x.n, doneAt: x.doneAt, doneBy: x.doneBy,
+            reopenedAt: x.reopenedAt, reopenedBy: x.reopenedBy,
+            postDoneOpen: x.postDoneOpen,
+          })),
+        }, null, 2));
+        return 0;
+      }
+      console.log(`${stamp} 总账本 · ${all ? '全集（跨窗口 / 跨账本）' : `本账（${lId}）`}\n`);
+      console.log(`  本工程账本 ${lId}   工程根 ${path.resolve(root)}`);
+      console.log(`  记录 ${st.entries.length} 笔 → 归并成 ${items.length} 项（按 账本#需求号 归并，后写的那笔为准）`);
+      if (!all && st.items.some((x) => x.ledger !== lId)) {
+        console.log(`  （另有 ${st.items.filter((x) => x.ledger !== lId).length} 项属于**别的账本** —— 看全集：ledger show --all-windows）`);
+      }
+      if (st.bad.length) console.log(badLine(st.bad));
+      const open = items.filter((x) => String(x.status) !== 'done');
+      const done = items.filter((x) => String(x.status) === 'done');
+      console.log('');
+      console.log(`  未做完 ${open.length} 项 —— 每条都看得出是哪个窗口的（窗口/会话 id + 工程根 + 时间）：`);
+      if (!open.length) console.log('    （没有未做完的项）');
+      for (const x of open) {
+        console.log(`    ○ ${refOf(x)}   [${x.window}]   ${x.title || ''}`);
+        console.log(`        工程根 ${x.projectRoot}   最后一次写下 ${x.at}   共 ${x.n} 笔   动过它的窗口：${x.windows.join(' · ')}`);
+        if (x.reopenedAt) console.log(`        ⟲ 由 ${x.reopenedBy} 于 ${x.reopenedAt} **显式重开**`);
+        if (x.note) console.log(`        备注 ${x.note}`);
+      }
+      console.log('');
+      console.log(`  已做完 ${done.length} 项（别的窗口据此能看见"这件做完了"）：`);
+      if (!done.length) console.log('    （还没有标成做完的项）');
+      for (const x of done) {
+        console.log(`    ✓ ${refOf(x)}   [${x.window}]   ${x.title || ''}`);
+        console.log(`        工程根 ${x.projectRoot}   **做完于 ${x.doneAt}（窗口 ${x.doneBy}）**   共 ${x.n} 笔`);
+        if (x.postDoneOpen.length) {
+          // 不许静默：done 之后还有人写过 open —— done 粘住了，但这件事必须被看见
+          console.log(`        ⚠ 做完之后还有 ${x.postDoneOpen.length} 笔 open（**done 没被盖回去**，但这说明有窗口还在把它当未做完）：`);
+          for (const p of x.postDoneOpen) console.log(`            · ${p.at}  窗口 ${p.window}  ${p.note}`);
+        }
+      }
+      const byWin = new Map();
+      for (const x of items) {
+        for (const w of (x.windows.length ? x.windows : [String(x.window ?? '(没写窗口)')])) {
+          const c = byWin.get(w) ?? { open: 0, done: 0 };
+          if (String(x.status) === 'done') c.done += 1; else c.open += 1;
+          byWin.set(w, c);
+        }
+      }
+      console.log('');
+      console.log('  ▸ 各窗口完成状态（口径：按"这一项被哪些窗口动过"计，一项被两个窗口动过就算两边各一件）：');
+      if (!byWin.size) console.log('    （总账还是空的 —— 还没有窗口写过东西）');
+      for (const [w, c] of [...byWin.entries()].sort()) console.log(`    ${w}   未做完 ${c.open} · 已做完 ${c.done}`);
+      console.log('');
+      console.log('  ★ R# 不跨账：本账里的 R# 只对本账有效；别的账本里的号印成 `<账本id>#R#`。');
+      return 0;
+    }
+    console.log('[用法] node warden.mjs ledger <add|done|reopen|flush|show|ids> ...（看 HELP）');
+    return 2;
+  }
   if (cmd === 'check') {
     const dir = path.join(root, WARDEN_DIR);
     if (!fs.existsSync(dir)) { console.log(`[用法] 这个工程还没有 ${WARDEN_DIR}/ —— 先跑：node warden.mjs init`); return 2; }
@@ -5958,19 +7958,52 @@ const HELP = `warden.mjs —— 需求监督员 / 交付审查 / 数据账本
   node warden.mjs report            生成 .warden/REPORT.md（需求→交付→成本 主表）
   node warden.mjs history <档位id>   查某个档位改过几次、每次花了多少
 
+  node warden.mjs handover draft --next "把 X 推到远端，然后重跑自检"   [--dry] [--rerun "…"]
+  node warden.mjs handover draft --no-next "活已做完，只需用户 push"     [--force] [--dry]
+  node warden.mjs handover log [--last N] [--json]
+      ★ 交接草稿（R10 定案：**显式命令**，不做自动挂进判定链）。由**主代理在轮收口时跑一次**。
+        · --next "…"    = 这一轮做完**还有后续** ⇒ 写一份 交接-<日期>.md 草稿 + 留痕；
+        · --no-next "…" = 这一轮**明确完成、无后续** ⇒ **不写草稿**，只留痕（这是"不写"的正规出口）。
+          ⚠ 它**不消写闸欠账**（故意的）—— 要消欠账就得真写一份交接，否则会养成
+            "被写闸拒时随手跑一次清欠账"的新坏习惯。
+        · --dry = 只打印本来会写什么，**不落盘**（连留痕都不写）；
+        · --files "a.rs,b/lib.rs" = 显式给本轮改动清单（不给就用 git status，拿不到就不写）；
+        · **每次调用**都往 .warden/HANDOVER-GATE.jsonl append 一行
+          （auto-draft-written / no-next-declared / refused:why）⇒ "跑过没跑过"可查；
+        · 目标文件已存在且首行不是 <!-- AUTO-ONLY --> ⇒ **绝不覆盖**（别人的文件）；
+        · 攒批口径 = **轮收口时写一次**，不是每个动作都写；不跑这条命令 ⇒ 与今天一字不差。
+          handover log 查跑过没跑过（⚠「声明无后续」**不是**"任务做完了"的证据）。
+
   node warden.mjs snapshot [--label "动 shape2 之前"]
       把 params.yml 点名的源文件**整个拷一份** + 记指纹和函数清单。
       这是"动手前先备份，出问题拉出来比较"用的。
   node warden.mjs diff [标签片段]
       和最近一次（或指定）快照对比：哪些文件改了、**哪些函数没了**、哪些档位值变了、逐行差异。
 
-  node warden.mjs voices [关键词]
-      窗口传递层（**最重要的一层**）：把用户在**每个窗口**说过的每一句话逐字落盘到
-      .warden/VOICE.jsonl。带关键词 = 查"用户说过什么"。
+  node warden.mjs voices [关键词] [--session <id>] [--all-windows] [--rebuild]
+      窗口传递层（**最重要的一层**）：把用户在**每个窗口**说过的每一句话逐字落盘。
+      ★ R37（用户 2026-09-24 逐字：「（用户原话已隐去 —— 公开版不留逐字）」）：
+        · **默认只扫本窗口**，写进**它自己那本** .warden/voices/<会话id>.jsonl；
+        · .warden/VOICE.jsonl 是**汇总本**（总账本）—— 要看它必须**显式** --all-windows；
+        · 认不出本窗口（子代理会话 / 环境里没有 DSH_SESSION_ID）⇒ **拒收 exit 2**，不替你猜；
+        · scoped 同步会**只增不改**地把本窗口的原话并进汇总本 —— 不并，check 的原话认领闸
+          会在正常流下**静默失效**（硬伤 A），它自己给的补救命令也永远消不掉提醒（硬伤 B）。
+      带关键词 = 查"用户说过什么"（默认也只在**本窗口那本**里查）。
       为什么它比 SPEC 重要：SPEC 是**汇总过的**，汇总本身就会丢信息 ——
       实测事故：用户 16:05 答过"木材工艺链"是什么，16:17 又被问了一遍。
       新记录带 "kind":"user"（老记录不动，读取时缺省当 user）——
       这样 VOICE 自己能分得清"用户真说"与"别处复述"。
+  node warden.mjs ledger <add|done|reopen|flush|show|ids>
+      ★ **总账本**（R37）：跨窗口可见的一本 .warden/LEDGER.jsonl —— 未做完项的汇总 + 各窗口完成状态。
+      每条都带 **窗口 id + 工程根 + 时间** ⇒ 别的窗口读得出是谁的（不许混成一本看不出出处的账）。
+        · ledger done --req R1 --title "…"   = 「做完后就标记做完」（带窗口 id + 时间）；
+        · ledger add --req R1 --status open   = 记一件没做完的；
+        · ledger reopen --req R1              = **唯一**能把 done 打回 open 的显式入口
+          （done 是**粘**的：后来的 open 盖不回去，只记成"做完之后还有人当它没做完"）；
+        · ledger flush                        = 把本窗口**还没做完**的项写进总账（收尾 results 自动跑）；
+        · ledger show [--all-windows] [--json]。
+      ★ **R# 不跨账**：需求号只在**它自己那本账**里有效。跨账引用必须写 <账本id>#R7
+        （实测：隔壁窗口有 R37/R38，本窗口也有 R37 —— 编号一样，指的不是同一件事）。
   node warden.mjs find [--all]
       发现台账（.warden/FINDINGS.jsonl）：**资料员 / 方向员**两个角色的产出写这儿。硬规则 ——
       必须署名（--by 资料员|方向员）、资料员报「事实」必须给 --source（出处）、
@@ -6015,8 +8048,8 @@ const HELP = `warden.mjs —— 需求监督员 / 交付审查 / 数据账本
   node warden.mjs brain [--artifact X]
       脑子角色组的审理状态：每个产物几个脑子、处于「没审 / 单审 / 一致 / 一致·互补 /
       ★冲突·未裁决 / ★改过但未复审」哪一种。
-      ⚠ **默认只派 1 个脑子** —— 「单审」是正常态，**不是欠账**。
-      用户原话（2026-09-2x）：「（用户原话已隐去 —— 公开版不留逐字）」
+      ⚠ **默认不派脑子** —— 随手小改动不必审；只在 conflict / shallow / explore 触发条件成立时才派。
+      用户原话（2026-09-25）：「（用户原话已隐去 —— 公开版不留逐字）」
   node warden.mjs brain brief --artifact <产物> [--trigger conflict|shallow|explore]
       打印**给脑子的任务书**（职责 / 被审产物 / 可读材料 / 交回格式），整段丢给独立子代理。
       不传 --trigger = 派第 1 个；传了 = **加派第 2 个**，任务书里会写清为什么加派，

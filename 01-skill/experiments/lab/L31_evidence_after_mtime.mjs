@@ -2,7 +2,7 @@
 /**
  * L31 · **证据必须晚于它引用的文件**（"假证据"这一类，2026-09-17 审查抓出来的）
  *
- * 事由：我把 R23 记成 done，引的证据是 `session-1aa1c02a` 的 system/message。
+ * 事由：我把 R23 记成 done，引的证据是 `session-aaa10000` 的 system/message。
  *   审查解帧逐字 grep：`状态类问题`/`直接回答`/`结论先行` **命中 0**；
  *   而该窗口创建于 **10:42:45Z**、第9条写入 `agent.cordis.yml` 是 **10:55:32Z**
  *   ⇒ **时间上不可能注入**。**"拿旧窗口证新规则"就是假证据**，比没证据更坏（它看起来像证据）。
@@ -14,7 +14,7 @@
  * 判据（机械）：
  *   ① 存在**至少一个**窗口：其 `system/message` 逐字含 needle，**且**创建时间晚于被引文件的 mtime；
  *      （一个都找不到 ⇒ 如实 SKIP —— 可能是会话被清了，不许假装通过）
- *   ② **反例必须被判无效**：`session-1aa1c02a`（早于 mtime）**不许**被算成有效见证；
+ *   ② **反例必须被判无效**：`session-aaa10000`（早于 mtime）**不许**被算成有效见证；
  *   ③ 时间比较必须认**两种**写法（毫秒时间戳与 ISO 串）—— 这就是我踩的第②个坑。
  */
 import fs from 'node:fs';
@@ -24,7 +24,7 @@ import { makeCtx } from './common.mjs';
 
 const NEEDLE = '状态类问题要一句话直接答';
 const PRESET = '<HOME>\\.dsh\\.agent-presets\\roles\\agent.cordis.yml';
-const OLD_WINDOW = 'session-1aa1c02a';
+const OLD_WINDOW = 'session-aaa10000';
 const SESS_ROOT = '<HOME>\\.dsh\\sessions';
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 

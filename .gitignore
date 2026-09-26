@@ -15,3 +15,25 @@ _brainB_tmp/
 # 常见噪声
 node_modules/
 *.log
+
+# IDE / 调试日志（2026-09-25 补：这两类东西会被 git add . 直接吃进去）
+#   .arts/             = CodeArts/IDE 生成的空配置目录
+#   .codeartsdoer/     = IDE 索引（含本机绝对路径的 file-index.db / codebase_embedded_file.txt）
+#   *-debug.jsonl      = 常驻插件写到 cwd 的调试日志（曾含 C:\Users\<user>\.dsh\settings.yaml）
+.arts/
+.codeartsdoer/
+*-debug.jsonl
+warden-watch-debug.jsonl
+# 散落的一次性文件（2026-09-25 加）
+#   用户逐字：「不要删除，不推送它们」⇒ 留在本地、挡住 `git add .`，但不进版本库。
+#   · _tmp_*.mjs   = 别的会话留下的一次性探针（解 zip / 搜字符串），含本机绝对路径
+#   · HANDOFF.md   = 另一份交接报告（含本机绝对路径），不是本包内容
+_tmp_*.mjs
+HANDOFF.md
+
+# 我自己的改动备份（不进公开仓库；用户「不要放私人隐私」，备份里是旧内容、无价值）
+*.bak-before-*
+*.bak-before-typefix
+
+# 插件运行时写出来的探针/状态文件（不是包内容）
+context-dedup.status.json

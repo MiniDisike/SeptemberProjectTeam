@@ -24,11 +24,68 @@
  *   （这条是「脑子A」的泄漏审计抓出来的。）
  */
 const ROOT = process.env.WARDEN_ROOT || process.cwd()
+
+const VERSION = '1.0.0-loadmark'
 // ⚠ plugin-io.js 与它**放在同一个目录**（本包已带上它）—— 脑子A/B 都指出：
 //   原来它没随包发布，于是 CMD 指向一个不存在的文件 ⇒ 常驻插件那条刷新线是死的。
 const CMD = 'node ' + require('path').join(__dirname, 'plugin-io.js').split(require('path').sep).join('/')
 const MIN_GAP_MS = 5000
 const FAIL_LIMIT = 3
+
+/**
+ * ★★ **warden.mjs 的位置：运行期派生，不许写死作者机路径**（公开包硬要求）。
+ *
+ * 病根（2026-09-23 修）：`steerDecision` 里那两条**每个新窗口推给用户的 steer 文案**
+ *   把命令写死成一串**作者机的绝对路径**（`node <作者机绝对路径>/skills/task-warden/warden.mjs …`）。
+ *   ⇒ 别的用户装上之后，屏幕上就是**指着别人的机器**让他去跑 ——
+ *     既暴露了作者路径，在**他的机器上根本跑不通**（那个路径不存在，必然 ENOENT）。
+ *
+ * 三级解析（与 `plugin-io.js` 的 `resolveWardenMjs` **同款口径**，避免两套写法各说各话：
+ *   字段优先级、`path.join` 的三段、`existsSync` 逐个探，**都照抄那一份**）：
+ *   ① `TASK_WARDEN_MJS` 环境变量 —— 显式指定，最高优先（测试 / 非标准安装位置）
+ *   ② `<DSH_HOME>/skills/task-warden/warden.mjs` —— `DSH_HOME` 是 DSH 自己注入的环境变量，
+ *      **换用户就自动跟着变**
+ *   ③ `<os.homedir()>/.dsh/skills/task-warden/warden.mjs` —— 退到 DSH 的默认家目录
+ *      （`DSH_HOME` 没设时 DSH 本身就是用这个默认值）
+ *
+ * ⚠ **故意不做的事**：**不写"找不到就退回作者机路径"**。
+ *   查不到就返回**占位形态**（`node "<你的 DSH_HOME>/skills/task-warden/warden.mjs"`）——
+ *   让用户看明白"这是要你自己填的"，而不是给他一条**在他机器上必然失败**的命令。
+ *   降级**只影响这两条 steer 文案里那一段**：判据、语气、含义、`once:'session'` 的行为一个字没动。
+ *
+ * 为什么在本文件内自己实现、不 `require('./plugin-io.js')` 拿：
+ *   `plugin-io.js` **跑起来就会干活**（顶层直接读盘、跑 `init`/`check`/`roles`、写镜像、`process.exit`），
+ *   它**不是**一个可以安全引入的纯函数模块 —— 引它等于在 steer 判定里顺手跑一遍整个检查。
+ *   ⇒ 在本文件内实现同款逻辑，并在此写明"与 plugin-io.js 的 resolveWardenMjs 同款"。
+ */
+function resolveWardenMjs() {
+  const pathx = require('path')
+  const candidates = []
+  if (process.env.TASK_WARDEN_MJS) candidates.push(String(process.env.TASK_WARDEN_MJS))
+  const dshHome = process.env.DSH_HOME
+  if (dshHome) candidates.push(pathx.join(dshHome, 'skills', 'task-warden', 'warden.mjs'))
+  try { candidates.push(pathx.join(require('os').homedir(), '.dsh', 'skills', 'task-warden', 'warden.mjs')) } catch (e) { /* 取不到家目录就算了 */ }
+  for (const c of candidates) {
+    try { if (require('fs').existsSync(c)) return c } catch (e) { /* 换下一个 */ }
+  }
+  return null
+}
+
+/** 占位形态：推不出真路径时给用户的**可自己填**的写法（**不是**作者机路径） */
+const WARDEN_MJS_PLACEHOLDER = '<你的 DSH_HOME>/skills/task-warden/warden.mjs'
+
+/**
+ * 拼"该跑的那条命令"：派生成功 ⇒ 用**他机器上的真实路径**；失败 ⇒ 占位形态 + 怎么填。
+ * `null` 时**不许**退回任何一台具体机器的路径（见 `resolveWardenMjs` 的注释）。
+ * 每次调用都重算（不缓存）：`DSH_HOME` 理论上不会在进程内变，但缓存会让"换环境后仍报旧路径"
+ * 变成一个新的静默失败面 —— 这里成本只有 1~3 次 `existsSync`，不值得冒那个险。
+ */
+function wardenCmdFor() {
+  let mjs = null
+  try { mjs = resolveWardenMjs() } catch (e) { mjs = null }
+  if (mjs) return 'node ' + mjs
+  return 'node "' + WARDEN_MJS_PLACEHOLDER + '"'
+}
 
 /**
  * ★ 观测把「轮次触发到底有没有跑成」变成可查的事实（2026-09-17 加）。
@@ -104,10 +161,182 @@ try {
   } catch (_) { /* 算了 */ }
 }
 
+/* ------------------------------------------------------------ 加载即留痕（★本文件是 6 份的「同款」母本） */
+/**
+ * ★★ **加载即留痕**（需求 R9 的后半句：「装完能验证真的加载了」）。
+ *
+ * 要解决的问题：5 个插件装上之后，**公开用户没有任何可机械验证的手段**证明它们真的跑起来了。
+ *   现状是"看效果"—— 而看守类插件在正常情况下**本就不该有任何可见效果**（fail-open、不欠账就一个字不说）
+ *   ⇒ 「它没加载」与「它加载了但今天没话说」在用户眼里**长得一模一样**（这正是本项目反复防的
+ *   「没查到 ≠ 查了没问题」：分不开，就等于没有证据）。
+ *
+ * 所以：**被宿主加载并 apply() 时，往同一个文件里写自己那一条**。
+ *
+ * ── 统一落点（6 个插件写**同一份文件**，不许各写各的）────────────────────────
+ *   `<落点目录>/PLUGIN-LOADED.json` —— 一个 JSON 文档，`plugins` 是 map，key = 插件 id：
+ *   { "schema":1, "updatedAt":"…", "plugins": { "context-dedup": {…}, "role-voices": {…}, … } }
+ *   为什么是"一个 map"而不是 6 个文件：用户**一条命令**就能看到"哪几个加载了"；
+ *   6 个文件就得 `dir` 六次再自己数，等于把"能验证"退回给用户。
+ *
+ * ── 落点目录**运行期派生**（公开包硬要求：**一个作者机路径都不许有**）──────────
+ *   多级兜底，顺序即优先级（前一个写得进去就用前一个，**第一个能写的胜出**）：
+ *     ① `$WARDEN_PLUGIN_LEDGER`   —— 显式指定目录（测试 / 非标准安装位置）
+ *     ② `$DSH_HOME/plugin-ledger` —— `DSH_HOME` 是 DSH 自己注入的环境变量，**换用户就跟着变**
+ *     ③ `<os.homedir()>/.dsh/plugin-ledger` —— 退到 DSH 的默认家目录
+ *        （`DSH_HOME` 没设时 DSH 本身就是用这个默认值；与 `plugin-io.js` 的
+ *         `resolveWardenMjs` / `warden-watch.js` 的 `resolveWardenMjs` **同款三级口径**，
+ *         只是把"读"换成"写"，并多一级 `tmpdir`）
+ *     ④ `<os.tmpdir()>/dsh-plugin-ledger` —— 上两级都写不进去时兜底
+ *        （`warden-watch.js:106-108` 实测记过：前几个候选哪一个能写取决于进程沙箱根，
+ *          临时区两边都写得进去）
+ *   一处作者机路径都没有：**每一段都是 `os`/`process.env` 现推的**，
+ *   推不出来就**往下一级退**，退到底还不行就**静默放弃**（见下）。
+ *
+ * ── 为什么选这一族目录（而不是工程根 `.warden/`）────────────────────────────
+ *   · 「装完能不能用」是**机器级事实**，不是某个工程的事实 —— 同一个插件会被好几个工程用到；
+ *     写进工程根 ⇒ 换个工程就得再查一遍，且"没写"分不清是没加载还是这个工程没跑过。
+ *   · 插件沙箱实测**写不进任意路径**（`warden-watch.js:106-108` 那条），
+ *     而 `$DSH_HOME` / 家目录 / 临时区是**插件进程真写得进去**的地方。
+ *   · 全部落在**用户自己的家目录/临时区**，不进任何仓库 ⇒ 不会被误推送到公开仓库。
+ *
+ * ── 隐私（硬约束）───────────────────────────────────────────────────────
+ *   **只写 5 样**：插件 id / 版本串 / ISO 时间戳 / pid / 宿主给的插件实例 id（Cordis 的 `ctx.id`，
+ *   它是 DSH 内部的**插件实例名**，**不是会话 id**，这一侧也从不读会话）。
+ *   **绝不写**：工程路径、会话 id、用户名、环境变量值、任何用户内容。
+ *   ⚠ 那个 `via` 值是**回落第几级**的标签，形如 `3·home` —— 是**来源标签、不是路径**，
+ *     它本身不含家目录字面量（路径只在内存里，不落盘）。
+ *
+ * ── fail-open（硬约束）──────────────────────────────────────────────────
+ *   写失败/目录不可写 ⇒ **静默降级、绝不抛**。这 6 个插件都是看守，
+ *   **自己坏了不许让用户的操作失败**，也不许因为"留痕失败"就在屏幕上吵闹。
+ *
+ * ── 不许在热路径上加同步 IO ─────────────────────────────────────────────
+ *   只在 `apply()` 里调**一次**。**不要**每次工具调用都写 —— 那是每秒几十次的
+ *   `mkdirSync`+`readFileSync`+`writeFileSync`，会把看守变成性能问题。
+ *   （`context-dedup` 自己在 `apply()` 里另有一条 `flushStatus()`，那是**另一个文件、
+ *     另一个用途**，本函数与它无关，也不共用任何状态。）
+ *
+ * ⚠⚠ **同款实现**：`context-dedup.js` / `role-voices.js` / `handover-gate.js` / `branch-guard.js` /
+ *   `report-spill.js` / `warden-watch.js` —— **这 6 份里的本段逐字节相同**（含本注释；
+ *   不点名"母本是哪一个"，因为点名表写死后在本文件里会把自己也列进"另外几份"，读着自相矛盾）。
+ *   可复算：`node _ledger_samecheck.mjs` 应打印 `distinct implementations: 1`，
+ *   函数代码段 sha256 前缀 `4489b155…`（**注释段自己不报 sha**：报了就会因为写进 sha 而自我失效）。
+ *   ⚠ 因文件而异的**不在这里**，在**调用点**：用 `name` 还是写死 id、用 `VERSION` 还是复用 `PLUGIN_VERSION`。
+ *   **为什么复制 6 份而不是抽一个公共模块**：`warden-watch.js:54-57` 已经写明这个坑 ——
+ *   `plugin-io.js` 顶层直接干活并 `process.exit`，**不是可以安全引入的纯函数模块**；
+ *   引一个公共文件还会多出"装上去了但那个文件没随包走"的新静默失败面（本包**已经**因为漏发
+ *   `plugin-io.js` 踩过一次，见 `warden-watch.js:27-29`）。
+ *   ⇒ 宁可 6 份逐字复制，也不新增一个可缺席的依赖 —— 但**口径必须只有一套**：
+ *     改这里的任何一行，**另外 5 份都要跟着改**（注释首行点名"与谁同款"就是为这个）。
+ *
+ * @param {string} pluginId 这个插件自己的 id（与 `name` 同一个字面量，**不是**会话 id）
+ * @param {string} version  这个插件自己的版本串
+ * @param {*}      hostId   宿主注入的插件实例 id（Cordis 的 `ctx.id`），没有就不写这个键
+ */
+function markPluginLoaded(pluginId, version, hostId) {
+  try {
+    const osx = require('os')
+    const pathx = require('path')
+    const fsx = require('fs')
+
+    /* ── ① 派生落点目录（多级兜底；**一个作者机路径都没有**） ── */
+    const cands = []
+    if (process.env.WARDEN_PLUGIN_LEDGER) {
+      cands.push({ dir: String(process.env.WARDEN_PLUGIN_LEDGER), src: 'env:WARDEN_PLUGIN_LEDGER' })
+    }
+    if (process.env.DSH_HOME) {
+      cands.push({ dir: pathx.join(String(process.env.DSH_HOME), 'plugin-ledger'), src: 'DSH_HOME' })
+    }
+    try { cands.push({ dir: pathx.join(osx.homedir(), '.dsh', 'plugin-ledger'), src: 'home' }) } catch (e) { /* 取不到家目录就退下一级 */ }
+    try { cands.push({ dir: pathx.join(osx.tmpdir(), 'dsh-plugin-ledger'), src: 'tmpdir' }) } catch (e) { /* 连临时区都没有就只剩前几级 */ }
+
+    const FILE = 'PLUGIN-LOADED.json'
+    const now = new Date().toISOString()
+    /* ⚠ 只记这几样；`pid` 用来区分"这次启动是哪个进程加载的"（重启后 pid 变、at 变） */
+    const mine = { id: String(pluginId), version: String(version), at: now, pid: process.pid }
+    /* 宿主给的实例 id：**有才写**（没有就整个键都不出现，不写 null 噪音） */
+    try { if (hostId !== undefined && hostId !== null && String(hostId) !== '') mine.hostId = String(hostId) } catch (e) { /* 算了 */ }
+
+    for (let i = 0; i < cands.length; i++) {
+      const c = cands[i]
+      try {
+        fsx.mkdirSync(c.dir, { recursive: true })
+        const p = pathx.join(c.dir, FILE)
+
+        /* ── ② 读旧文档（**读不动就当空文档**：读失败绝不许变成写失败） ── */
+        let doc = null
+        try {
+          const parsed = JSON.parse(fsx.readFileSync(p, 'utf8'))
+          /* 只有"真的是个普通对象"才复用；数组/字符串/数字都当坏档重建 */
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) doc = parsed
+        } catch (e) { doc = null }
+        if (doc === null) doc = {}
+        /* `plugins` 是放各插件记录的 map；顶层其他键（schema/更新时间）原样保留 */
+        if (!doc.plugins || typeof doc.plugins !== 'object' || Array.isArray(doc.plugins)) doc.plugins = {}
+
+        doc.schema = 1
+        doc.updatedAt = now
+        doc.plugins[String(pluginId)] = mine
+
+        /* ── ③ 原子写：先写 `.tmp` 再 `renameSync` ──
+         *   为什么：6 个插件**几乎同时** apply（同一次 compose 的 6 条 insert），
+         *   直接 `writeFileSync` 有互相读到"写了一半"的窗口 ⇒ 可能整个 map 被截断。
+         *   rename 在同一卷上是原子的 ⇒ 读者永远读到"完整的上一版或完整的新版"。
+         *   ⚠ 这里**不跨进程加锁**：跨进程锁要建锁文件，锁文件自己就是新的静默失败面
+         *   （进程崩了就永久锁死）。实测这个窗口的后果是"某一条留痕丢了"，
+         *   而**丢了就是没记录** —— 正是我们要的诚实降级：不会伪造"加载了"。
+         *   （调用点用 `markPluginLoadedWithRetry` **再读一次**、必要时重写一轮来收敛。） */
+        const tmp = p + '.' + process.pid + '.tmp'
+        fsx.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n', 'utf8')
+        fsx.renameSync(tmp, p)
+        return { ok: true, path: p, via: (i + 1) + '·' + c.src }
+      } catch (e) { /* 这一级不可写 ⇒ 换下一级；**绝不抛** */ }
+    }
+    return { ok: false, path: null, via: null }
+  } catch (e) {
+    /* 连 require/os 都炸了 —— 那更不能影响主功能 */
+    return { ok: false, path: null, via: null }
+  }
+}
+
+/**
+ * 调用点的**收敛重试**：6 个插件几乎同时 apply，有可能互相覆盖（见上面 ③ 的说明）。
+ * 这里只补一件事：**写完再读一次，自己那条不在就再写一轮**（最多 2 轮）。
+ * 目的不是"保证万无一失"，而是把"同时加载 6 个"这个常见情形的漏记压到实测为零；
+ * 仍然失败就**静默算了**（漏记 = 没记录，不伪造"加载了"）。
+ * 与 `markPluginLoaded` 一样：**绝不抛**，也**只在 apply() 里调用一次**。
+ */
+function markPluginLoadedWithRetry(pluginId, version, hostId) {
+  for (let round = 0; round < 2; round++) {
+    const r = markPluginLoaded(pluginId, version, hostId)
+    if (!r.ok) return r
+    try {
+      const doc = JSON.parse(require('fs').readFileSync(r.path, 'utf8'))
+      if (doc && doc.plugins && doc.plugins[String(pluginId)]) return r
+    } catch (e) { /* 读不动就再来一轮 */ }
+  }
+  return markPluginLoaded(pluginId, version, hostId)
+}
+
+/**
+ * 本插件自己的版本串 —— ★ **只给上面那条"加载即留痕"用**，不参与任何判定。
+ * 为什么要有它：留痕记录必须能回答"我看到的这条是**哪个版本**写的"
+ * （不然升级之后没法分辨"新版本没加载"和"旧版本还活着"）。
+ * 改这个文件里任何**会影响行为**的东西时，请一并把它 +1（口径：语义化版本 `MAJOR.MINOR.PATCH`）。
+ */
 module.exports = {
   name: 'warden-watch',
   inject: ['shell'],
   apply(ctx) {
+    /* ★ 加载即留痕：**整个插件生命周期里只写这一次**（不在任何热路径上）。
+     *   写失败静默降级（`markPluginLoaded*` 内部已经吞掉所有异常）。
+     *   位置选在 `apply()` 最前面：宿主调用 `apply` 本身就等于"这个插件加载成功了"，
+     *   所以留痕不该等任何后续步骤 —— 哪怕下面任何一行抛了，留痕也已经如实写下。
+     *   ⚠ 本插件**另有**一份自己的 `PLUGIN-LIVE.json`（写的是"账本读数"，不是"我加载了"），
+     *     两者的**用途、内容、落点都不同** ⇒ 各写各的，**不合并**、也**不互相覆盖**
+     *     （`PLUGIN-LIVE.json` 的写作方是 `plugin-io.js`，本文件只读它，见下面 `readLiveSnapshot`）。 */
+    markPluginLoadedWithRetry('warden-watch', VERSION, ctx && ctx.id)
+
     const shell = ctx.shell
     // R36 用：工具给的 file_path 可能是相对路径。会话工作区不一定是 ROOT，两个基准都试。
     let CWDS = [ROOT]
@@ -194,7 +423,7 @@ module.exports = {
             + ' ' + '0'             // hostSlots
             + ' ' + q('no')         // hostSlotHit
             // ★ 2026-09-23 新增第 22 个参数：**这个会话自己的工作区**。
-            //   病根：plugin-io.js 的 ROOT 原来硬编码 `<WORKSPACE>` ⇒ 用户在别的盘干活，
+            //   病根：plugin-io.js 的 ROOT 原来硬编码成**作者机的一个固定盘** ⇒ 用户在别的盘干活，
             //   插件读写的却是那本账（屏幕上显示另一个项目的账）。见 plugin-io.js 顶部那段注释。
             //   取 `agent.session.header.cwd`（官方 hooks-codex:146 读的就是这个字段）。
             + ' ' + q(sessionCwd || ROOT),
@@ -253,7 +482,7 @@ module.exports = {
      * ★★ **回合边界的开关 —— 默认 `off`**（2026-09-23 事故 I60 之后改的）。
      *
      * 事故（用户原话：「（用户原话已隐去 —— 公开版不留逐字）」）：
-     *   我第一版把它默认打开，结果用户的新窗口（session-532b909a）问了个**数学笑话**，
+     *   我第一版把它默认打开，结果用户的新窗口（session-eee50000）问了个**数学笑话**，
      *   回答完之后**单回合跑了 43 次工具调用 / 26 步 / 约 20 分钟**，
      *   最后**用户不得不手动停掉它**。日志实证：`{"ev":"steer","kind":"check-red",...}`。
      *   根因：那条 steer 说的是「check 是红的，先处理掉再收尾」，而那个红是**结构性的**
@@ -305,9 +534,9 @@ module.exports = {
      *
      * ⚠⚠ **2026-09-23 修一个"读写路径不一致"的真 bug（I60 的第二半）**：
      *   用户把插件注入给他的那段话贴了回来，里面写着「需求监督未通过：**14 条**」——
-     *   而 **14 条是 `<WORKSPACE>` 那本旧账的数字**，不是那个会话自己工作区的数字。
+     *   而 **14 条是作者机那本旧账的数字**，不是那个会话自己工作区的数字。
      *   根因：**写**快照时 plugin-io 用的是 `argv[22]`（会话工作区，我这次刚修好的），
-     *   而**读**快照时这里按 `DEBUG_CANDIDATES` 顺序找，**第一个是 `process.cwd()` = `<WORKSPACE>`**
+     *   而**读**快照时这里按 `DEBUG_CANDIDATES` 顺序找，**第一个是 `process.cwd()` = 作者机的那个目录**
      *   ⇒ 读到的永远是那本旧账 ⇒ steer 拿旧账的数字去说这个会话。
      *   修法：**读必须跟着写走** —— 先把"这个会话自己的工作区"排在候选第一位。
      */
@@ -330,7 +559,7 @@ module.exports = {
      * 判据：这一轮要不要 steer、说什么。`{should:false}` 是正常路径（没欠账就一个字不说）。
      *
      * ⚠⚠ **2026-09-23 实测事故后收紧（I60）** —— 第一版**把新窗口卡死了**：
-     *   现场：新窗口（session-532b909a）问了个数学笑话，回答完**还在跑**；
+     *   现场：新窗口（session-eee50000）问了个数学笑话，回答完**还在跑**；
      *   日志实证：`{"ev":"steer","kind":"check-red","turn":1,"used":0,"viaHelper":true}`，
      *   而那个会话跑到 **turn=1 / step=23** 仍没停。
      *   根因两条（都是我第一版写错的）：
@@ -370,7 +599,7 @@ module.exports = {
         return { should: true, kind: 'no-ledger', once: 'session',
           text: '[九月项目团] 这个窗口还没有账本：`.warden/SPEC.md` 里一条需求都没有。'
             + '先把用户这次说的原话**逐字**写进 `.warden/SPEC.md` 成 `## R1 · <标题>`（含 `- 原话:` / `- 必须:` / `- 不要:` / `- 子项:`），'
-            + '再跑 `node <HOME>/.dsh/skills/task-warden/warden.mjs claims add --voice "<会话id>#<seq>" --kind 需求 --ref R1 --why "…"`。'
+            + '再跑 `' + wardenCmdFor() + ' claims add --voice "<会话id>#<seq>" --kind 需求 --ref R1 --why "…"`。'
             + '没有需求被锁住，后面的对账/角色仪表/交付闸全是空的。'
             + '（这条只提醒一次，**不要为了它反复重试**：它是配置缺口，不是靠多干活能变绿的。）' }
       }
@@ -381,7 +610,7 @@ module.exports = {
         return { should: true, kind: 'no-role-speech', once: 'session',
           text: '[九月项目团] 本轮账本里**一条角色发言都没有**（`ROLE_SPEECH.jsonl` 没新增）。'
             + '角色不是"主代理想起了才派"：现在派 **资料员**（要事实/出处）与 **方向员**（要大局观/维度清单）各出一次，'
-            + '用 `node <HOME>/.dsh/skills/task-warden/warden.mjs role say --role <角色> --text "<它的原话>"` 逐字落账。'
+            + '用 `' + wardenCmdFor() + ' role say --role <角色> --text "<它的原话>"` 逐字落账。'
             + '（这条只提醒一次。）' }
       }
       return { should: false, why: 'nothing-to-say' }
@@ -463,9 +692,16 @@ module.exports = {
           watchLog({ at: new Date().toISOString(), ev: 'steer-suppressed', kind: dd.kind, turn: turn, used: g.used, max: STEER_MAX_PER_TURN, pid: process.pid })
           return
         }
+        // ★ v4：`source.kind` 必须是产出者自有的身份，**不许**是 `"plugin"` ——
+        //   判据见 handover-gate.js 的 `makeSteerMessage()` 头注（装机包
+        //   `lib/types/message-sources.js` 逐字）；v3→v4 迁移对第三方插件的改写是
+        //   `plugin:${plugin}` ⇒ 这里写成 `plugin:task-warden`，与新老日志里的名字一致。
+        //   旧写法 `{kind:'plugin', plugin:'task-warden'}` 会在写盘那一步抛
+        //   `SessionFormatError`（`assertV4SourceRowAdmission` 校验 `agent/inbox/spliced`
+        //   的 `inserted[].source`）⇒ 整条消息不落盘、整个回合以 error 收尾。
         const msg = createUserMessage
-          ? createUserMessage({ content: [{ type: 'text', text: dd.text }], source: { kind: 'plugin', plugin: 'task-warden' } })
-          : { role: 'user', content: [{ type: 'text', text: dd.text }], source: { kind: 'plugin', plugin: 'task-warden' } }
+          ? createUserMessage({ content: [{ type: 'text', text: dd.text }], source: { kind: 'plugin:task-warden' } })
+          : { role: 'user', content: [{ type: 'text', text: dd.text }], source: { kind: 'plugin:task-warden' } }
         agent.steer(msg)
         steerRecord(turn, sid, dd.kind, false, g.path, g.why)
         watchLog({ at: new Date().toISOString(), ev: 'steer', kind: dd.kind, turn: turn, used: g.used, viaHelper: !!createUserMessage, pid: process.pid })

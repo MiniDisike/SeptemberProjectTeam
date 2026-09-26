@@ -94,7 +94,7 @@ export default async function run() {
   const lineB = lines.findIndex((l) => l.includes(REAL_QUOTE)) + 1;
 
   const src = runWarden(sb.dir, ['sources', '--add', REAL_WORKSPACE], { sessions: 'real', sessionId: sb.sessionId });
-  c.check('前置 · sources --add <WORKSPACE>：语料指向真实工作区',
+  c.check('前置 · sources --add REAL_WORKSPACE：语料指向真实工作区',
     src.code === 0 && src.stdout.includes(encodeWorkspace(REAL_WORKSPACE)),
     `exit=${src.code}；${grab(src.stdout, [/^--/, /合计真用户消息/], 3).join(' | ')}`);
 

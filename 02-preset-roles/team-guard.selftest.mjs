@@ -18,15 +18,22 @@ import path from 'node:path'
 import {
   apply,
   denyReason,
+  doneGateReason,
   findProjectRoot,
   gateDecision,
+  isBrainRecordCall,
   isCheckCall,
+  isDoneClaimCall,
   isEngagementCall,
+  isPresentCall,
   isRecordCall,
   isSubagent,
   loadOptions,
+  presentGateReason,
   protocolText,
   readWardenState,
+  readPendingVotes,
+  triageGateReason,
   wardenPath,
 } from './team-guard.mjs'
 // 命名空间导入：用来断言"**没有**导出 inject"（E08 回归）
@@ -293,8 +300,9 @@ check('快照 text 是函数（每步重算）', typeof ctx.contexts[0]?.text ==
 check('挂上了 tools/pre-execute', ctx.listeners.has('tools/pre-execute'))
 check('**没有**多余的 agent/pre-step 监听器（那条路已经删掉，不留死代码）',
   !ctx.listeners.has('agent/pre-step'))
-check('一共只挂了 1 个监听器（挂得越多，越可能是死代码）',
-  [...ctx.listeners.values()].reduce((n, v) => n + v.length, 0) === 1,
+check('只挂了 2 个监听器 —— tools/pre-execute（两道闸）+ tools/post-execute（读 check 判决）',
+  [...ctx.listeners.values()].reduce((n, v) => n + v.length, 0) === 2
+    && ctx.listeners.has('tools/pre-execute') && ctx.listeners.has('tools/post-execute'),
   String([...ctx.listeners.keys()].join(',')))
 check('★ 没有声明 inject（声明了的话 prompt 服务一停，闸会跟着一起静默死掉）',
   guardNs.inject === undefined, JSON.stringify(guardNs.inject))
@@ -309,40 +317,69 @@ check('★ prompt 服务缺失 ⇒ 段与快照都不注册', ctxNoPrompt.sectio
 check('★ prompt 服务缺失 ⇒ **闸仍然装上**（不再被硬依赖拖死）',
   ctxNoPrompt.listeners.has('tools/pre-execute'))
 const noPromptDeny = await ctxNoPrompt.listeners.get('tools/pre-execute')[0](
-  { name: 'write', arguments: {}, agent: { session: { header: { cwd: proj } } } }, allow)
+  { name: 'write', arguments: { file_path: 'x.txt' }, agent: { session: { header: { cwd: proj } } } }, allow)
 check('★ prompt 服务缺失 ⇒ 闸照样会响', noPromptDeny?.kind === 'deny', JSON.stringify(noPromptDeny))
+check('★ 那一次拒是**角色闸**拒的（gate==="role"，不是 code 闸顺手替它响）',
+  noPromptDeny?.gate === 'role', JSON.stringify(noPromptDeny?.gate))
 
 const preTool = ctx.listeners.get('tools/pre-execute')[0]
 const agent = { session: { header: { cwd: proj, agentPreset: 'roles' } } }
 
-const first = await preTool({ name: 'write', arguments: { file_path: 'x.js' }, agent }, allow)
+const first = await preTool({ name: 'write', arguments: { file_path: 'x.txt' }, agent }, allow)
 check('第一次 write 被拒', first?.kind === 'deny', JSON.stringify(first))
+check('★ 这一次拒的是**角色闸**（gate==="role"）—— 夹具必须是**非代码文件**，否则 code 闸会抢答',
+  first?.gate === 'role', JSON.stringify(first?.gate))
 check('拒绝理由里带 init 与 role brief',
   String(first?.reason).includes('init') && String(first?.reason).includes('role brief'))
 
-const second = await preTool({ name: 'write', arguments: { file_path: 'x.js' }, agent }, allow)
+const second = await preTool({ name: 'write', arguments: { file_path: 'x.txt' }, agent }, allow)
 check('同一个会话第二次 write 放行（最多拦一次）', second?.kind === 'allow')
 
 // 有界观测探针（「审查」E02）：证明"监听器真被派发过 / 闸真响过"
 const projProbe = path.join(proj, '.warden', PROBE_NAME)
 const probeText = (() => { try { return fs.readFileSync(projProbe, 'utf8') } catch { return '' } })()
 check('★ 探针落到工程根 .warden/ 里（不是乱扔）', probeText.length > 0, projProbe)
+check('★ 挂载时的 mounted 行也被补记（backfill）到工程根 —— 不再只扔给 process.cwd()',
+  probeText.includes('"ev":"mounted"') && probeText.includes('"backfill":true'), projProbe)
 check('★ 探针证明监听器**真的被派发过**（tool 行）', probeText.includes('"ev":"tool"'))
 check('★ 探针证明闸**真的响过**（deny 行）', probeText.includes('"ev":"deny"'))
+check('★ deny 行带得出**是哪道闸**（gate:"role" 至少出现过一次）',
+  probeText.includes('"gate":"role"'), '缺 gate:"role" ⇒ 角色闸的响声与 code 闸的响声又分不开')
 check('★ 探针里的 tool 行带得出工具名', probeText.includes('"tool":"write"'))
+
+// ★ R36 复查第 3 条回归：**连发很多调用之后，角色闸的 deny 行不许被 8 行预算挤掉**
+//   （改前实测：8 次 x1..x8.js 把预算吃光，第 9 次 x.txt 被角色闸拒，而 gate:"role" 那行根本没落盘）
+{
+  const budgetAgent = { session: { header: { cwd: proj } } }
+  let sawRoleDeny = false
+  for (let i = 1; i <= 8; i += 1) {
+    const r = await preTool({ name: 'write', arguments: { file_path: `x${i}.js` }, agent: budgetAgent }, allow)
+    if (r?.kind === 'deny' && r?.gate === 'role') sawRoleDeny = true
+  }
+  const ninth = await preTool({ name: 'write', arguments: { file_path: 'x.txt' }, agent: budgetAgent }, allow)
+  if (ninth?.kind === 'deny' && ninth?.gate === 'role') sawRoleDeny = true
+  // ⚠ 这条**不许跟配置挂钩**：codeGate=off 时角色闸在第 1 次就拒，codeGate=enforce 时在第 9 次拒
+  //   —— 两种配置下都必须是 true，否则它就是又一条"只在某个配置下绿"的假断言。
+  check('★ 连发 9 次写文件的过程中，角色闸真的拒过（判决自带 gate==="role"）',
+    sawRoleDeny, 'codeGate=off ⇒ 第 1 次；codeGate=enforce ⇒ 第 9 次（前 8 次被 code 闸吃掉）')
+  const probeText2 = (() => { try { return fs.readFileSync(projProbe, 'utf8') } catch { return '' } })()
+  check('★ 角色闸的 deny 探针有**专用保底额度**，不被 8 行总预算挤掉',
+    probeText2.includes('"gate":"role"'), 'gate:"role" 那行没落盘 ⇒ "角色闸没响"与"预算用光"又分不开')
+}
 
 // ★ 关键回归：**跑 init 不能解锁**（第一版的洞就是这个）
 const agentInit = { session: { header: { cwd: proj } } }
 await preTool({ name: 'pwsh', arguments: { command: `node "${W}" init` }, agent: agentInit }, allow)
-const afterInit = await preTool({ name: 'write', arguments: {}, agent: agentInit }, allow)
+const afterInit = await preTool({ name: 'write', arguments: { file_path: 'x.txt' }, agent: agentInit }, allow)
 check('★ 只跑过 init 的会话，write **仍然被拒**（init 不是解锁口令）',
   afterInit?.kind === 'deny', JSON.stringify(afterInit))
+check('★ 这一条拒也必须来自**角色闸**（gate==="role"）', afterInit?.gate === 'role', JSON.stringify(afterInit?.gate))
 
 // 另一个会话：真的派了角色 ⇒ 直接放行
 const agent2 = { session: { header: { cwd: proj } } }
 const engaged = await preTool({ name: 'subagent_liaison', arguments: { prompt: '查一下' }, agent: agent2 }, allow)
 check('派资料员本身不被拦', engaged?.kind === 'allow')
-const afterEngage = await preTool({ name: 'write', arguments: {}, agent: agent2 }, allow)
+const afterEngage = await preTool({ name: 'write', arguments: { file_path: 'x.txt' }, agent: agent2 }, allow)
 check('已派过角色的会话 write 放行', afterEngage?.kind === 'allow')
 
 // 子代理：永远放行
@@ -392,6 +429,204 @@ check('协议段两次渲染字节相同（system prompt 不抖动 ⇒ 不破坏
 check('协议段拿不到 agent 时**照样渲染**（宁可吵，不许静默失效）',
   ctx.sections[0].text(undefined) === mainProtocol)
 check('状态快照对子代理渲染成空串', ctx.contexts[0].text({ agent: subAgent }) === '')
+
+// ───────────────────────────────────────────────── 8. 多点门控：done 闸 + present 闸
+
+section('8. 多点门控：done 闸 / present 闸 / brain 跟踪')
+
+const doneReason = doneGateReason(W)
+const presentReason = presentGateReason(W)
+
+check('isDoneClaimCall 认得 record --status done',
+  isDoneClaimCall('pwsh', { command: `node "${W}" record --req R1 --status done` }))
+check('isDoneClaimCall 认得不带引号的路径',
+  isDoneClaimCall('bash', { command: `node ${W} record --status done --req R1` }))
+check('isDoneClaimCall 不认 record --status partial',
+  !isDoneClaimCall('pwsh', { command: `node "${W}" record --req R1 --status partial` }))
+check('isDoneClaimCall 不认 check',
+  !isDoneClaimCall('pwsh', { command: `node "${W}" check` }))
+check('isDoneClaimCall 不认非 shell 工具',
+  !isDoneClaimCall('write', { file_path: 'x.js' }))
+
+check('isBrainRecordCall 认得 brain record',
+  isBrainRecordCall('pwsh', { command: `node "${W}" brain record --artifact x --brain A --verdict accept` }))
+check('isBrainRecordCall 不认 brain brief',
+  !isBrainRecordCall('pwsh', { command: `node "${W}" brain brief --artifact x` }))
+check('isBrainRecordCall 不认 check',
+  !isBrainRecordCall('pwsh', { command: `node "${W}" check` }))
+
+check('isPresentCall 认得 present 工具',
+  isPresentCall('present', { files: [{ path: 'x.md' }] }))
+check('isPresentCall 不认 write',
+  !isPresentCall('write', { file_path: 'x.js' }))
+check('isPresentCall 不认 pwsh',
+  !isPresentCall('pwsh', { command: 'echo hi' }))
+
+check('doneGateReason 里有 check 命令', doneReason.includes('check'))
+check('doneGateReason 明说重试不会放行', doneReason.includes('重试不会放行'))
+check('presentGateReason 里有 brain 命令', presentReason.includes('brain'))
+check('presentGateReason 明说重试不会放行', presentReason.includes('重试不会放行'))
+
+// 假 ctx 验 done 闸 + present 闸真会响
+{
+  const ctx2 = fakeCtx()
+  apply(ctx2)
+  const mainAgent2 = { session: { header: { cwd: tmp, origin: undefined } } }
+  const preTool2 = ctx2.listeners.get('tools/pre-execute')[0]
+  const postTool2 = ctx2.listeners.get('tools/post-execute')[0]
+  const allow2 = () => Promise.resolve({ kind: 'allow' })
+
+  // 没跑过 check ⇒ record --status done 被拦
+  const doneCall = await preTool2({
+    name: 'pwsh',
+    arguments: { command: `node "${W}" record --req R1 --status done` },
+    agent: mainAgent2,
+  }, allow2)
+  check('★ done 闸：没跑 check 就 record --status done ⇒ deny',
+    doneCall?.kind === 'deny' && doneCall?.gate === 'done',
+    `got ${JSON.stringify(doneCall)}`)
+
+  // 跑了 check 且通过 ⇒ record --status done 放行
+  await postTool2({
+    name: 'pwsh',
+    arguments: { command: `node "${W}" check` },
+    agent: mainAgent2,
+  }, { content: [{ type: 'text', text: '需求监督通过：0 条未通过' }] }, allow2)
+  const doneCall2 = await preTool2({
+    name: 'pwsh',
+    arguments: { command: `node "${W}" record --req R1 --status done` },
+    agent: mainAgent2,
+  }, allow2)
+  check('★ done 闸：check 通过后 record --status done ⇒ allow',
+    doneCall2?.kind !== 'deny')
+
+  // 没派过脑子 ⇒ present 被拦
+  const presentCall = await preTool2({
+    name: 'present',
+    arguments: { files: [{ path: path.join(tmp, 'x.md') }] },
+    agent: mainAgent2,
+  }, allow2)
+  check('★ present 闸：没派脑子就 present ⇒ deny',
+    presentCall?.kind === 'deny' && presentCall?.gate === 'present',
+    `got ${JSON.stringify(presentCall)}`)
+
+  // 派了脑子 ⇒ present 放行
+  await preTool2({
+    name: 'pwsh',
+    arguments: { command: `node "${W}" brain record --artifact x --brain A --verdict accept` },
+    agent: mainAgent2,
+  }, allow2)
+  const presentCall2 = await preTool2({
+    name: 'present',
+    arguments: { files: [{ path: path.join(tmp, 'x.md') }] },
+    agent: mainAgent2,
+  }, allow2)
+  check('★ present 闸：派了脑子后 present ⇒ allow',
+    presentCall2?.kind !== 'deny')
+
+  // 子代理的 record --status done 不被拦
+  const subAgent2 = { session: { header: { cwd: tmp, origin: 'subagent' } } }
+  const subDone = await preTool2({
+    name: 'pwsh',
+    arguments: { command: `node "${W}" record --req R1 --status done` },
+    agent: subAgent2,
+  }, allow2)
+  check('★ done 闸：子代理 record --status done ⇒ allow（不拦子代理）',
+    subDone?.kind !== 'deny')
+}
+
+// ───────────────────────────────────────────────── 9. 分诊闸：readPendingVotes + present 未决议投票
+
+section('9. 分诊闸：readPendingVotes / triageGateReason / present 闸未决议投票')
+
+check('readPendingVotes 空字符串 ⇒ []',
+  Array.isArray(readPendingVotes('')) && readPendingVotes('').length === 0)
+check('readPendingVotes 无 VOTES.jsonl ⇒ []',
+  Array.isArray(readPendingVotes(tmp)) && readPendingVotes(tmp).length === 0)
+
+const wardenDir = path.join(tmp, 'triage-test')
+fs.mkdirSync(path.join(wardenDir, '.warden'), { recursive: true })
+const votesPath = path.join(wardenDir, '.warden', 'VOTES.jsonl')
+const iso = (n) => new Date(Date.parse('2026-09-26T00:00:00Z') + n * 1000).toISOString()
+
+fs.writeFileSync(votesPath, [
+  JSON.stringify({ topic: 'T1', role: '监督员', choice: 'A', at: iso(1) }),
+  JSON.stringify({ topic: 'T1', role: '审查', choice: 'A', at: iso(2) }),
+  JSON.stringify({ topic: 'T1', role: '记录', choice: 'A', at: iso(3) }),
+  JSON.stringify({ topic: 'T1', role: '支线守门员', choice: 'B', at: iso(4) }),
+].join('\n') + '\n', 'utf8')
+const pending1 = readPendingVotes(wardenDir)
+check('readPendingVotes 3/7 票未过半 ⇒ [T1]',
+  pending1.length === 1 && pending1[0] === 'T1', JSON.stringify(pending1))
+
+fs.writeFileSync(votesPath, [
+  JSON.stringify({ topic: 'T2', role: '监督员', choice: 'A', at: iso(1) }),
+  JSON.stringify({ topic: 'T2', role: '审查', choice: 'A', at: iso(2) }),
+  JSON.stringify({ topic: 'T2', role: '记录', choice: 'A', at: iso(3) }),
+  JSON.stringify({ topic: 'T2', role: '支线守门员', choice: 'A', at: iso(4) }),
+].join('\n') + '\n', 'utf8')
+const pending2 = readPendingVotes(wardenDir)
+check('readPendingVotes 4/7 票过半 ⇒ []',
+  pending2.length === 0, JSON.stringify(pending2))
+
+fs.writeFileSync(votesPath, [
+  JSON.stringify({ topic: 'T1', role: '监督员', choice: 'A', at: iso(1) }),
+  JSON.stringify({ topic: 'T1', role: '审查', choice: 'A', at: iso(2) }),
+  JSON.stringify({ topic: 'T2', role: '监督员', choice: 'B', at: iso(1) }),
+  JSON.stringify({ topic: 'T2', role: '审查', choice: 'B', at: iso(2) }),
+  JSON.stringify({ topic: 'T2', role: '记录', choice: 'B', at: iso(3) }),
+  JSON.stringify({ topic: 'T2', role: '支线守门员', choice: 'B', at: iso(4) }),
+].join('\n') + '\n', 'utf8')
+const pending3 = readPendingVotes(wardenDir)
+check('readPendingVotes 混合 T1未过半+T2过半 ⇒ [T1]',
+  pending3.length === 1 && pending3[0] === 'T1', JSON.stringify(pending3))
+
+const triReason = triageGateReason(W, ['议题X'])
+check('triageGateReason 含 vote 命令', triReason.includes('vote'))
+check('triageGateReason 含议题名', triReason.includes('议题X'))
+check('triageGateReason 明说重试不会放行', triReason.includes('重试不会放行'))
+
+{
+  const ctx3 = fakeCtx()
+  apply(ctx3)
+  const mainAgent3 = { session: { header: { cwd: wardenDir, origin: undefined } } }
+  const preTool3 = ctx3.listeners.get('tools/pre-execute')[0]
+  const allow3 = () => Promise.resolve({ kind: 'allow' })
+
+  fs.writeFileSync(votesPath, [
+    JSON.stringify({ topic: '未决议议题', role: '监督员', choice: 'A', at: iso(1) }),
+    JSON.stringify({ topic: '未决议议题', role: '审查', choice: 'A', at: iso(2) }),
+  ].join('\n') + '\n', 'utf8')
+
+  await preTool3({
+    name: 'pwsh',
+    arguments: { command: `node "${W}" brain record --artifact x --brain A --verdict accept` },
+    agent: mainAgent3,
+  }, allow3)
+
+  const presentTri = await preTool3({
+    name: 'present',
+    arguments: { files: [{ path: path.join(wardenDir, 'x.md') }] },
+    agent: mainAgent3,
+  }, allow3)
+  check('★ 分诊闸：brain 过了 + 有未决议投票 ⇒ deny (pending-votes)',
+    presentTri?.kind === 'deny' && presentTri?.gate === 'present' && presentTri?.why === 'pending-votes',
+    `got ${JSON.stringify(presentTri)}`)
+
+  fs.writeFileSync(votesPath, [
+    JSON.stringify({ topic: '未决议议题', role: '监督员', choice: 'A', at: iso(1) }),
+    JSON.stringify({ topic: '未决议议题', role: '审查', choice: 'A', at: iso(2) }),
+    JSON.stringify({ topic: '未决议议题', role: '记录', choice: 'A', at: iso(3) }),
+    JSON.stringify({ topic: '未决议议题', role: '支线守门员', choice: 'A', at: iso(4) }),
+  ].join('\n') + '\n', 'utf8')
+  const presentTri2 = await preTool3({
+    name: 'present',
+    arguments: { files: [{ path: path.join(wardenDir, 'x.md') }] },
+    agent: mainAgent3,
+  }, allow3)
+  check('★ 分诊闸：投票过半后 present ⇒ allow',
+    presentTri2?.kind !== 'deny', `got ${JSON.stringify(presentTri2)}`)
+}
 
 // ───────────────────────────────────────────────── 结果
 

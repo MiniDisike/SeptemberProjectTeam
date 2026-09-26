@@ -649,6 +649,27 @@ cases.push({
   name: '㊺ 没声明子项的需求照旧放行', why: '不能因为没写「子项」就拦住所有人', expect: 'accept', kind: 'pos',
   fn: () => { fs.writeFileSync(SPEC_P, SPEC_R1_NOSUB, 'utf8'); return recordCli2(['--req', 'R1', '--status', 'done', '--delivered', '多面体球', '--evidence', 'src/plugins/anchor_orb.rs:1', '--avoided', '立方体=没有用立方体|光球=没有用光球']); },
 });
+/**
+ * ★ 原话逐字核对（2026-09-25 新增）：record 时，SPEC 里的原话必须与语料逐字一致。
+ * 负控：原话被改写（"不要"→"别用"）→ record 拒收。
+ * 正控：原话与语料一致 → record 放行。
+ */
+cases.push({
+  name: '㊻ 原话被改写 → record 拒收', why: 'AI 改写用户原话 = 需求漂移，record 这一步就拦（不让改写后的原话进账本）', expect: 'reject', kind: 'neg',
+  fn: () => {
+    const paraphrased = SPEC_R1_NOSUB.replace(QUOTE, QUOTE.replace('不要立方体', '别用立方体'));
+    fs.writeFileSync(SPEC_P, paraphrased, 'utf8');
+    return recordCli2(['--req', 'R1', '--status', 'in_progress', '--delivered', '开始做', '--why', '测试']);
+  },
+});
+cases.push({
+  name: '㊼ 原话与语料一致 → record 放行', why: '逐字一致的原话不该被拦', expect: 'accept', kind: 'pos',
+  fn: () => {
+    const spec = `# 需求锁定表\n\n## R99 · 测试需求\n- 原话: ${QUOTE}\n- 出处: session:session-st0001#1\n- 为什么: 测试\n- 必须: 测试\n- 锁定: 2026-09-16\n`;
+    fs.writeFileSync(SPEC_P, spec, 'utf8');
+    return recordCli2(['--req', 'R99', '--status', 'in_progress', '--delivered', '开始做', '--why', '测试']);
+  },
+});
 // 还原 SPEC.md（夹具复原 —— 不计入控数）
 cases.push({
   name: '（夹具复原）还原 SPEC.md', why: '收尾清理，不参与统计', expect: 'custom', kind: 'setup',
@@ -689,7 +710,39 @@ const SC = (() => {
     o.refNew = `${sb.sessionId}#4`;
     o.refH1 = `${sb.sessionId}#2`;
     o.record = lab.runWarden(sb.dir, ['record', '--req', 'R1', '--status', 'done', '--delivered', '多面体球骨架', '--evidence', 'src/plug.rs:1', '--why', '搭起来了']);
-    o.voices1 = lab.runWarden(sb.dir, ['voices']);
+    /**
+     * ★★ 2026-09-24 修（P-M10 提出 · **P-M20 实测选型**）：**取数口径**（R37 / P-M5）——
+     *   原来这里是 `['voices']`。R37 之后 `voices` 默认**只扫本窗口**（scoped），
+     *   而 scoped 的 `voices` **不写汇总本** `.warden/VOICE.jsonl`
+     *   （P-M5/P-M19 的 `syncVoices`：`const want = allWindows ? null : (String(session ?? '').trim() || null)`）。
+     *   ⇒ 下一行 `readFileSync(VOICE.jsonl)` 直接 ENOENT ⇒ `SC.ok=false`
+     *     ⇒ 认领闸那一组自检**全部**变红（红的是**夹具的取数方式**，不是那些断言）。
+     *
+     * ⚠ **不许为了变绿放宽那 12 条断言** —— 它们本身是对的。改的只是"去哪取数"。
+     *
+     * ★★ **两条修法都实测过（P-M20，镜像 + `DSH_HOME`，原样读数）**：
+     *   | 被测 warden | 变体A `--all-windows` | 变体B `--session <id>` |
+     *   |---|---|---|
+     *   | **当前安装份**（403397 B，sha b54d42ad；`resolveWindowScope`/`--all-windows` 命中 **0**） | **exit 0** · 负控 58 / 正控 42 全过 | **exit 1** · 「不通过：**12 条不对**」 |
+     *   | **scoped 版**（P-M5 work，477722 B，sha c3edef9d） | **exit 0** · 58/42 全过 | **exit 0** · 58/42 全过 |
+     *
+     *   ⇒ **选变体A**。判据（不是口味）：
+     *   · **变体B 在当前 warden 上就红**：当前 `voices` 的取数是
+     *     `argv.slice(1).filter((a) => !a.startsWith('--'))` ⇒ `--session` 被滤掉、**会话 id 被当成关键词**，
+     *     于是它走"搜索"那条路**直接 return 0**、**不落盘** ⇒ 下一行照样 ENOENT。
+     *     实测那 12 条全是一句 `claims 沙箱没建起来：ENOENT … \claims-gate\.warden\VOICE.jsonl`。
+     *     这不是"红得对"，是**把夹具的取数方式变成红**（正是本注释要治的那个病）。
+     *   · **变体A 两种状态都对**：`--all-windows` 在 scoped 版里是"显式扫全集 ⇒ 动汇总本"那条路
+     *     （L42 用例②逐字断言的就是它）；在当前版里它是个**认不出的旗标**、被忽略 ⇒ 行为等同原来的
+     *     `['voices']`（默认全集、写汇总本）。⇒ **apply 前 / apply 后都对**。
+     *   · 变体B 的"更贴产品路"（走真实用户那条 scoped 路）**不假**，但它要求被测 warden
+     *     **已经**支持 `voices --session`；现在不支持 ⇒ 它是一颗**先炸的**雷。
+     *
+     * ⚠ **P-M19 正在从零重做 R37** —— 它落地后这个夹具的取数口径**可能还要再调**；
+     *   本注释记的是**今天**的实测（两个 warden 版本 + 两个变体，共 4 组读数），
+     *   不是"以后一定对"。要重判时照上表重跑一遍即可。
+     */
+    o.voices1 = lab.runWarden(sb.dir, ['voices', '--all-windows']);
     o.voiceRaw1 = fs.readFileSync(path.join(sb.wdir, 'VOICE.jsonl'), 'utf8');
     // 第一次 check：没有水位线文件 → 自动设成"当前 VOICE 最新一条"；3 条历史未认领**不许**失败
     o.checkHist = lab.runWarden(sb.dir, ['check']);
@@ -697,20 +750,34 @@ const SC = (() => {
       ? JSON.parse(fs.readFileSync(path.join(sb.wdir, 'CLAIMS.watermark.json'), 'utf8')) : null;
     // 用户又说了新的一句（水位线**之后**）
     lab.appendUserFrame(sb, C_NEW);
-    o.voices2 = lab.runWarden(sb.dir, ['voices']);
+    // ★ 同上（P-M20）：这一行下面**也**要读汇总本 VOICE.jsonl ⇒ 同样必须显式扫全集，
+    //   否则 R37 之后这一处会以**同样的方式** ENOENT（一处漏修 = 12 条红只消一半）。
+    o.voices2 = lab.runWarden(sb.dir, ['voices', '--all-windows']);
     o.voiceRaw2 = fs.readFileSync(path.join(sb.wdir, 'VOICE.jsonl'), 'utf8');
     o.checkNew = lab.runWarden(sb.dir, ['check']);
-    o.list = lab.runWarden(sb.dir, ['claims']);
+    /**
+     * ★★ 2026-09-24 修（P-M20，同上一条的**同根**）：下面这一组 `claims` 调用**同样**必须显式 `--all-windows`。
+     *   根因与上面 `voices` 那两行是**同一条**（R37 / P-M5 的取数口径），只是走的是另一条 CLI：
+     *   · scoped 版里 `claims` 默认**只扫本窗口**，而本夹具的断言全是**全集口径**的
+     *     （"未认领 4 / 共 4"）⇒ 必须显式要全集；
+     *   · 不显式要的时候，它会按**环境里那个 DSH_SESSION_ID**（跑 selftest 的那个窗口）取数，
+     *     本沙箱根本没有那个窗口的账本 ⇒ 打印「未认领 0 / 共 0」⇒ 52/53 两条正控变红。
+     *     ⇒ 顺带治了一个**非密闭**：夹具的结果不该随"谁在跑 selftest"变。
+     *   · 对**当前** warden 也安全（它不认这个旗标；`claims` 的 `sub = argv[1]` 落不到
+     *     `add`/`why` 上 ⇒ 走默认列表，`opt()` 取不到就当没给）—— 两种状态下都对。
+     *   ⚠ 这里**没有**采用 `--session <id>` 那条变体：实测它在**当前** warden 上是红的（见上面那张表）。
+     */
+    o.list = lab.runWarden(sb.dir, ['claims', '--all-windows']);
     // 拒绝类：kind 乱写 / voice 不存在 / 认领成 SPEC 里没有的需求号
-    o.badKind = lab.runWarden(sb.dir, ['claims', 'add', '--voice', o.refNew, '--kind', '乱写', '--ref', 'R1', '--why', '随便']);
-    o.noVoice = lab.runWarden(sb.dir, ['claims', 'add', '--voice', 'session-fixture0#1', '--kind', '需求', '--ref', 'R1', '--why', '随便']);
-    o.noReq = lab.runWarden(sb.dir, ['claims', 'add', '--voice', o.refNew, '--kind', '需求', '--ref', 'R99', '--why', '随便']);
-    o.whyBefore = lab.runWarden(sb.dir, ['claims', 'why', '--voice', o.refNew]);
+    o.badKind = lab.runWarden(sb.dir, ['claims', 'add', '--all-windows', '--voice', o.refNew, '--kind', '乱写', '--ref', 'R1', '--why', '随便']);
+    o.noVoice = lab.runWarden(sb.dir, ['claims', 'add', '--all-windows', '--voice', 'session-fixture0#1', '--kind', '需求', '--ref', 'R1', '--why', '随便']);
+    o.noReq = lab.runWarden(sb.dir, ['claims', 'add', '--all-windows', '--voice', o.refNew, '--kind', '需求', '--ref', 'R99', '--why', '随便']);
+    o.whyBefore = lab.runWarden(sb.dir, ['claims', 'why', '--all-windows', '--voice', o.refNew]);
     // 认领掉它 → check 该回到 exit 0（不许误伤）
-    o.added = lab.runWarden(sb.dir, ['claims', 'add', '--voice', o.refNew, '--kind', '已答过', '--ref', `${sb.sessionId}#1`, '--why', '这段在第一条原话里已经答过']);
-    o.list2 = lab.runWarden(sb.dir, ['claims']);
+    o.added = lab.runWarden(sb.dir, ['claims', 'add', '--all-windows', '--voice', o.refNew, '--kind', '已答过', '--ref', `${sb.sessionId}#1`, '--why', '这段在第一条原话里已经答过']);
+    o.list2 = lab.runWarden(sb.dir, ['claims', '--all-windows']);
     o.checkClaimed = lab.runWarden(sb.dir, ['check']);
-    o.whyAfter = lab.runWarden(sb.dir, ['claims', 'why', '--voice', o.refNew]);
+    o.whyAfter = lab.runWarden(sb.dir, ['claims', 'why', '--all-windows', '--voice', o.refNew]);
     o.report = lab.runWarden(sb.dir, ['report']);
     // 最后：手写一行 kind 乱写的 CLAIMS.jsonl → 坏行**不许被静默吞掉**（吞掉会让"已认领"多算）
     fs.appendFileSync(path.join(sb.wdir, 'CLAIMS.jsonl'),

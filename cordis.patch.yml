@@ -1,0 +1,49 @@
+# task-warden · bundle 的挂载点（**相对路径**，跟着包走）
+#
+# 这个文件是"bundle 包"自己带的 patch 层。DSH 的加载器会把它接到 profile 上：
+#   · 包根 `package.json` 声明 `dsh.bundle.patch: "./cordis.patch.yml"`；
+#   · bundle 的 patch 路径**相对包目录**解析（`dsh-app-boot/lib/index.js:508-510`
+#     `bundlePatchPaths = join(packageDir, file)`）；
+#   · 下面 `insert[].name` 的 `./` 相对路径，**基准是本文件所在目录**（同一个包根）
+#     ——`anchorInsertedPluginNames` 把它转成 `file://` URL（`lib/index.js:3536-3545`）。
+#
+# ⇒ **所以这个包里没有任何绝对路径**：包拷到哪、插件就跟到哪。
+#   换机器、换盘符、换用户名都不用改一个字。这也是为什么不写 `<WORKSPACE>` 那类占位符 ——
+#   占位符在别的用户机器上会被当成**相对路径**去解析，结果是插件**静默不加载**（只打一行警告）。
+#
+# ⚠⚠ **这个文件必须是「顶层 YAML 数组」**。写成映射、写空、只留注释 ⇒ `lib/index.js:3566`
+#   直接 `throw`（"must be a top-level YAML array of loader patch entries"）⇒ **启动失败**。
+#   要停用整个包：把 `insert` 那一段删掉，或让包不被列入 profile 的 `bundles`；
+#   不要把这个文件清空（空文件/只有注释同样会让启动失败）。
+#
+# ── 怎么关掉单个插件 ──────────────────────────────────────────────
+#   从下面的 `insert` 列表里**删掉对应的那两行**（`- id:` 与 `name:`），存盘即可。
+#   增删 insert 行本身是 **live 的**（由 `@deepseek-ai/dsh-hmr` 监听本文件，不必重启）；
+#   但**改插件代码（.js）必须重启** DSH —— 模块被 Node 的 require 缓存住。
+#
+# ── 装上之后你会感觉到什么（第 3 条最要紧）─────────────────────────
+#   ① warden-watch   —— 只提醒，不拦：新窗口没有账本时推一行提示（每会话一次）。
+#   ② context-dedup / report-spill / role-voices —— 不拦任何操作：
+#        · context-dedup 只对"够大的工具结果"做去重，省上下文；
+#        · report-spill 把长报告正文落盘，上下文只留头尾 + 路径（落盘失败 ⇒ 原样放行）；
+#        · role-voices 把角色原话归档到 `<工程根>\角色发言\`，不进上下文。
+#   ③ handover-gate  —— **它会拒绝改文件**：在**有 `.git` 但没有 `交接.md`** 的目录里，
+#        改盘类工具（write/edit/shell）会被直接 deny（它自认是 fail-closed 设计）。
+#        要关掉它：删掉下面 handover-gate 那两行；或设 `WARDEN_HANDOVER_STEER=off`
+#        （后者只关"收尾提醒"，不关 deny）。
+#   ④ branch-guard   —— **没有 `.warden` 账本时它是惰性的**（三条前置判据全部 allow）；
+#        只在工程里存在支线账本、且支线失衡时才 deny。
+
+- insert:
+    - id: warden-watch
+      name: ./03-host-plugin/warden-watch.js
+    - id: context-dedup
+      name: ./03-host-plugin/context-dedup.js
+    - id: role-voices
+      name: ./03-host-plugin/role-voices.js
+    - id: handover-gate
+      name: ./03-host-plugin/handover-gate.js
+    - id: branch-guard
+      name: ./03-host-plugin/branch-guard.js
+    - id: report-spill
+      name: ./03-host-plugin/report-spill.js

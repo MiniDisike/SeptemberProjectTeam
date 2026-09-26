@@ -10,9 +10,15 @@
  *   trigger: boot | turn | manual | probe-write
  *   by     : plugin（插件喊的）| manual-cli（我手工跑的）—— 不许把自己的手跑记成插件跑的
  *
+ * ⚠ **本文件是公开包的一部分**：它随插件一起发给**别的用户**，装在**别人的路径**上。
+ *   ⇒ **这个文件里不许出现作者机路径**（不许出现"某个具体用户的家目录 + 用户名"，
+ *     或作者机上的某个固定盘符目录），
+ *     凡路径一律**运行期派生**（`process.cwd()` / `DSH_HOME` / `os.homedir()` / `os.tmpdir()`），
+ *     换机器后必须仍然能工作。可见的路径示例**一律写成 `<DSH_HOME>` 这类占位符**。
+ *
  * 落盘（重要）：这个子进程跑在插件的沙箱里，实测
- *   mode=workspace-write  root=<HOME>\DSH-Workspace  sessionId=null
- * 也就是说 **<WORKSPACE> 和 <HOME>\.dsh 都写不了（EPERM）**，
+ *   mode=workspace-write  root=<插件沙箱根>  sessionId=null
+ * 也就是说 **会话工作区所在盘 和 `<DSH_HOME>` 往往都写不了（EPERM）**，
  * 只有插件自己的沙箱根和临时区能写。所以下面是「多路径镜像」：能写哪个写哪个，
  * 并把真正写成功的路径放进 liveWrote 里，好让外面知道该去哪儿看。
  *
@@ -30,32 +36,91 @@ const os = require('os')
 const { execFileSync } = require('child_process')
 
 /**
- * ⚠⚠ **2026-09-23 修：ROOT 原来是硬编码 `<WORKSPACE>`** —— 那是 R5 事故的真正病根。
+ * ⚠⚠ **2026-09-23 修：ROOT 原来硬编码成作者机的一个固定盘** —— 那是 R5 事故的真正病根。
  *
  * 支线守门员七席投票时的原话：「**R5 必须立即修** —— 它是两条候选的共同前置；
  *   账本找不到，屏幕和闸都是空的。硬证据：`PLUGIN-LIVE.json` 的 detail 是 `[结构] 缺 .warden/SPEC.md`，
- *   而真账本在 `<WORKSPACE>\task-warden\.warden\SPEC.md`（**另一个盘**）。」
+ *   而真账本在**另一个盘**的 `task-warden\.warden\SPEC.md` 下。」
  *
- * 实测（2026-09-23）：这个常量写死 ⇒ **用户在 `<HOME>\DSH-Workspace` 干活，
- *   插件读写的却是 `<WORKSPACE>` 那本账** —— 屏幕上显示的是**另一个盘、另一个项目**的账。
+ * 实测（2026-09-23）：这个常量写死 ⇒ **用户在插件沙箱根（`<插件沙箱根>`）干活，
+ *   插件读写的却是作者机那个固定盘上的账** —— 屏幕上显示的是**另一个盘、另一个项目**的账。
+ *   ⚠ 公开包里这条更严重：别的用户机器上那个盘**根本不存在** ⇒ 账本永远找不到。
  *
- * 现在三级解析（**保守**：都不给才退回旧值，行为向后兼容）：
+ * 现在三级解析（**都不给才退回进程当前目录**）：
  *   ① `WARDEN_ROOT` 环境变量（调用方显式指定）
  *   ② `argv[22]`（`warden-watch.js` 传"这个会话自己的工作区"）
- *   ③ 旧值兜底
+ *   ③ `process.cwd()`（运行期值，**不再是作者机的某个盘**）
+ *
+ * ⚠⚠ **2026-09-23 修（公开包）：本文件是随包发给公开用户的，一个作者机路径都不许留。**
+ *   三处硬编码作者机路径全部改成**运行期派生**（换机器后必须仍能工作）：
+ *     · `ROOT` 兜底 `<作者机的一个固定盘>` → `process.cwd()`；
+ *     · `WARDEN` 字面量 `<作者机绝对路径>\skills\task-warden\warden.mjs` → 由 `DSH_HOME` 推导（见下）；
+ *     · `OUT_DIRS` 里的 `<作者机家目录>\DSH-Workspace\task-warden` → `os.homedir()` 推导。
+ *   **为什么不能退回作者机路径**：别的用户机器上那个路径不存在 ⇒ `execFileSync` 必然 ENOENT
+ *   ⇒ 插件"装了等于没装"。宁可**明确降级**（拿到人话错误），也不许猜一条别人的路径。
  */
-const ROOT = process.env.WARDEN_ROOT || process.argv[22] || '<WORKSPACE>'
-const WARDEN = '<HOME>\\.dsh\\skills\\task-warden\\warden.mjs'
+const ROOT = process.env.WARDEN_ROOT || process.argv[22] || process.cwd()
+
+/**
+ * ★ **warden.mjs 的位置：运行期推导，不许写死作者机路径**（公开包硬要求）。
+ *
+ * 为什么要费这个劲：`WARDEN` 原来是一个**写死的作者机绝对路径**，
+ *   而它被三处 `execFileSync(process.execPath, [WARDEN, 'init'|'check'|'roles', ...])` 用（下方 L246/L283/L344 附近）。
+ *   ⇒ 换到别的用户机器上：那个路径**不存在** ⇒ 每次都是 ENOENT
+ *   ⇒ **插件"装了等于没装"**：屏幕上永远是"check 没跑成"，用户以为是自己环境不好。
+ *
+ * 三级解析（**按可靠性从高到低**，都推不出来就返回 `null`，由调用处报人话）：
+ *   ① `TASK_WARDEN_MJS` 环境变量 —— 显式指定，最高优先（测试 / 非标准安装位置）
+ *   ② `<DSH_HOME>/skills/task-warden/warden.mjs` —— `DSH_HOME` 是 DSH 自己注入的环境变量
+ *      （本机实测 `DSH_HOME=<用户家目录>\.dsh`），**换用户就自动跟着变**
+ *   ③ `<os.homedir()>/.dsh/skills/task-warden/warden.mjs` —— 退到 DSH 的默认家目录
+ *      （`DSH_HOME` 没设时 DSH 本身就是用这个默认值）
+ *
+ * ⚠ **故意不做的事**：这里**不写"找不到就退回作者机路径"**。
+ *   查不到就返回 `null` —— 调用处据此给出**人话错误**（"task-warden 的 warden.mjs 没找到，
+ *   它应该装在 <DSH_HOME>\skills\task-warden\ 下"），而不是抛一个别人看不懂的 ENOENT。
+ */
+function resolveWardenMjs() {
+  const candidates = []
+  if (process.env.TASK_WARDEN_MJS) candidates.push(String(process.env.TASK_WARDEN_MJS))
+  const dshHome = process.env.DSH_HOME
+  if (dshHome) candidates.push(path.join(dshHome, 'skills', 'task-warden', 'warden.mjs'))
+  try { candidates.push(path.join(os.homedir(), '.dsh', 'skills', 'task-warden', 'warden.mjs')) } catch (e) { /* 取不到家目录就算了 */ }
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c } catch (e) { /* 换下一个 */ }
+  }
+  return null
+}
+const WARDEN = resolveWardenMjs()
+
+/**
+ * ⚠ **没有 warden.mjs 时**：不是"静默跳过"，而是把**这一条**事实记进 `helperError`
+ *   （它进快照的 `helperError` 字段 ⇒ 外面看得见），让屏幕报出**人话**。
+ *   **不许**因此放宽任何检查、也不许伪造一个"通过" —— 只是把"为什么没跑成"说清楚。
+ */
+function wardenMissingNote() {
+  return 'task-warden 的 warden.mjs 没找到（装了吗？）—— 应该在 <DSH_HOME>\\skills\\task-warden\\warden.mjs；'
+    + '可用环境变量 TASK_WARDEN_MJS 显式指定。当前 DSH_HOME=' + JSON.stringify(process.env.DSH_HOME || '')
+    + '，home=' + (function () { try { return os.homedir() } catch (e) { return '?' } })()
+}
 const LIVE_NAME = 'PLUGIN-LIVE.json'
 const CALLS_NAME = 'PLUGIN-CALLS.jsonl'
 const MAX_FEED = 80
 
 // 按优先级镜像：第 1 个是"本该写的地方"，后面是插件沙箱真正允许的地方。
+// ⚠ 公开包：第 2 项原来是写死的**一个作者机绝对路径**（<作者机家目录>\DSH-Workspace\task-warden）——
+//   现在改成**运行期派生**：`<os.homedir()>/DSH-Workspace/task-warden`。
+//   **为什么保留这一项而不是删掉**：它是"插件子进程真正写得进去"的兜底之一
+//   （实测插件沙箱根就是 `<插件沙箱根>`，在本机恰好等于 `<家目录>\DSH-Workspace`），删了会少一条能落盘的镜像；
+//   而换成 homedir 推导后，**换用户自动跟着用户的家目录走**，语义不变、路径不再属于作者。
 const OUT_DIRS = [
   path.join(ROOT, '.warden'),
-  '<HOME>\\DSH-Workspace\\task-warden',
+  (function () {
+    try { return path.join(os.homedir(), 'DSH-Workspace', 'task-warden') }
+    catch (e) { return null }   // 取不到家目录 → 这一项作废，由下面的临时区兜底
+  })(),
   os.tmpdir(),
-]
+].filter(Boolean)
 
 const trigger = process.argv[2] || 'unknown'
 const turn = Number(process.argv[3] || 0) || 0
@@ -215,7 +280,7 @@ const tmpOut = path.join(os.tmpdir(), 'task-warden-check-' + String(process.pid)
  * 依据（七席投票里唯一的全体共识）：
  *   · **支线守门员**：「**R5 必须立即修** —— 它是两条候选（回合边界 / 看得见）的**共同前置**；
  *     账本找不到，屏幕和闸都是空的。」硬证据：`PLUGIN-LIVE.json` 的 detail 是
- *     `[结构] 缺 .warden/SPEC.md`，而真账本在 `<WORKSPACE>\task-warden\.warden\SPEC.md`（**另一个盘**）。
+ *     `[结构] 缺 .warden/SPEC.md`，而真账本在**另一个盘**的 `task-warden\.warden\SPEC.md` 下。
  *   · **记录**：「当前红是**结构性**的（7 个账本文件全 missing），不是模型一轮能补完的。」
  *   · 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」+「我要的是一个**真正能够安装就能够正常使用**的」
  *     + R25 的必须项「新窗口自动建轮次（**不是拒交**）」。
@@ -229,6 +294,10 @@ let autoInit = null
 try {
   const specPath = path.join(ROOT, '.warden', 'SPEC.md')
   if (!fs.existsSync(specPath)) {
+    if (WARDEN === null) {
+      // ⚠ 公开包：找不到 warden.mjs ⇒ **不假装建过骨架**，把原因如实报出来（人话）。
+      autoInit = 'skipped:' + wardenMissingNote()
+    } else {
     const tmpInit = path.join(os.tmpdir(), 'task-warden-init-' + String(process.pid) + '.txt')
     const fd0 = fs.openSync(tmpInit, 'w')
     try {
@@ -237,6 +306,7 @@ try {
     } catch (e) {
       autoInit = 'failed:' + String(e.code || e.message).slice(0, 60)
     } finally { fs.closeSync(fd0) }
+    }
   }
 } catch (e) { autoInit = 'threw:' + String((e && e.message) || e).slice(0, 60) }
 
@@ -269,11 +339,18 @@ try {
 try {
   const fd = fs.openSync(tmpOut, 'w')
   try {
+    if (WARDEN === null) {
+      // ⚠ 公开包：warden.mjs 找不到 ⇒ `checkExit` **保持 null**（= "没跑成"，
+      //   与 exit 1 的"check 未通过"是两回事，这个区分是上面 L358 那段注释定下的口径）。
+      //   同时把**人话原因**记进 helperError ⇒ ok=false、屏幕上说得出来为什么。
+      helperError.push(wardenMissingNote())
+    } else {
     execFileSync(process.execPath, [WARDEN, 'check'], {
       cwd: ROOT, timeout: 45000, maxBuffer: 8 * 1024 * 1024,
       stdio: ['ignore', fd, fd],
     })
     checkExit = 0
+    }
   } catch (e) {
     if (typeof e.status === 'number') checkExit = e.status
     else helperError.push('跑 check 失败(基础设施): ' + String(e.code || e.message))
@@ -329,10 +406,17 @@ try {
   const tmpRoles = path.join(os.tmpdir(), 'task-warden-roles-' + String(process.pid) + '.txt')
   const fd2 = fs.openSync(tmpRoles, 'w')
   try {
+    if (WARDEN === null) {
+      // ⚠ 公开包：找不到 warden.mjs ⇒ `rolesRan` **保持 false**、`rolesExit` 保持 null
+      //   （= "没跑成"，不是"角色健康检查失败" —— 后者是 rolesExit=1 的**结论**，不许混）。
+      //   rolesRan=false 时下面 rolesChanged 恒为 false ⇒ **不会**把"角色在跑"那行错误地推给用户。
+      helperError.push(wardenMissingNote())
+    } else {
     execFileSync(process.execPath, [WARDEN, 'roles', '--health', '--json'], {
       cwd: ROOT, timeout: 30000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', fd2, fd2],
     })
     rolesExit = 0
+    }
   } catch (e) {
     // exit 1 = 有角色被查出问题（**这是结论，不是故障**）；拿不到状态码才算基础设施问题
     if (typeof e.status === 'number') rolesExit = e.status
@@ -386,7 +470,7 @@ const sayWho = function (role) {
  *
  * 用户原话：「（用户原话已隐去 —— 公开版不留逐字）」
  * 根因：这里原来**只读工作区那一本账**（`ROOT/.warden`），而本轮所有工作都在
- *   `<WORKSPACE>\task-warden\.warden` 里（票 12:16Z、发现 12:23Z），工作区那本的最新活动
+ *   而在**另一个盘**的 `task-warden\.warden` 里（票 12:16Z、发现 12:23Z），工作区那本的最新活动
  *   停在 10:04Z ⇒ 浮层永远显示三小时前的东西。**读错了账本，不是渲染坏了。**
  *
  * 现在：工作区账本 + **它下面每个"有 .git 且有 .warden"的子目录**（= 各子工程），
@@ -655,7 +739,7 @@ const snap = {
 }
 
 // ── 4) 落盘：多路径镜像（能写哪个写哪个）──────────────────────────────────
-// 注意：写不进 `<WORKSPACE>\.warden` 是**沙箱的预期行为**（EPERM），不是故障 ——
+// 注意：写不进 `<会话工作区>\.warden` 是**沙箱的预期行为**（EPERM），不是故障 ——
 // 所以它进 mirrorDenied，**不污染 helperError**（那个字段要留给"执行体自己坏了"）。
 function persist(out) {
   for (const dir of OUT_DIRS) {

@@ -1,0 +1,11 @@
+﻿{
+  "name": "task-warden",
+  "version": "1.0.0",
+  "private": true,
+  "description": "task-warden host plugins bundle. Relative paths only - safe to copy anywhere.",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

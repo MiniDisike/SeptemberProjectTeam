@@ -112,7 +112,7 @@ export function judgeLedger(root, deps) {
   if (hasSpec) { try { specText = fs.readFileSync(specPath, 'utf8') } catch (e) { specText = '' } }
   const reqCount = (specText.match(/^##\s+R\d+\b/gm) || []).length
   if (reqCount === 0) {
-    const wardenCmd = 'node <HOME>/.dsh/skills/task-warden/warden.mjs'
+    const wardenCmd = wardenCmdFor()
     return {
       kind: 'deny',
       reason: '[task-warden 交付闸] 先别交：**这个工程还没有账本**'
@@ -235,6 +235,60 @@ export const PATH_FIELD = 'file_path'
 const DEFAULT_WARDEN_CMD = 'node warden.mjs snapshot --label'
 // ⚠ 公开版：运行时推导
 const WARDEN_MJS_DIR = nodePath.join(nodeOs.homedir(), '.dsh', 'skills', 'task-warden') + nodePath.sep
+
+/**
+ * ★★ **warden.mjs 的位置：运行期派生，不许写死作者机路径**（公开包硬要求）。
+ *
+ * 病根（2026-09-23 修）：`judgeLedger` 的"没有账本 ⇒ 拒交"分支原来把命令写死成一串
+ *   **作者机的绝对路径**（`node <作者机绝对路径>/skills/task-warden/warden.mjs`）。
+ *   ⇒ 别的用户装上之后，屏幕上会指着**别人的机器**让他去跑 ——
+ *     既暴露了作者路径，在**他的机器上根本跑不通**（那个路径不存在，必然 ENOENT）。
+ *
+ * 三级解析（与 `plugin-io.js` 的 `resolveWardenMjs` **同款口径**，避免两套写法各说各话：
+ *   字段优先级、`path.join` 的三段、`existsSync` 逐个探，**都照抄那一份**）：
+ *   ① `TASK_WARDEN_MJS` 环境变量 —— 显式指定，最高优先（测试 / 非标准安装位置）
+ *   ② `<DSH_HOME>/skills/task-warden/warden.mjs` —— `DSH_HOME` 是 DSH 自己注入的环境变量，
+ *      **换用户就自动跟着变**
+ *   ③ `<os.homedir()>/.dsh/skills/task-warden/warden.mjs` —— 退到 DSH 的默认家目录
+ *      （`DSH_HOME` 没设时 DSH 本身就是用这个默认值）
+ *
+ * ⚠ **故意不做的事**：**不写"找不到就退回作者机路径"**。
+ *   查不到就返回**占位形态**（`node "<你的 DSH_HOME>/skills/task-warden/warden.mjs"`）——
+ *   让用户看明白"这是要你自己填的"，而不是给他一条**在他机器上必然失败**的命令。
+ *   这也与本文件 `fail-open` 的硬约束一致：这里的降级**只影响文案**，
+ *   `judgeLedger` 仍然照旧返回 deny（判据一个字没动）。
+ *
+ * 为什么在本文件内自己实现、不 `import` `plugin-io.js`：
+ *   `plugin-io.js` 是 **CommonJS**（`require`，无 `export`），而本文件是 **ESM**（`import`）——
+ *   跨模块引它只能走 `createRequire`，而 `gate.mjs` 是**每个 edit/write 工具调用都要过**的热路径，
+ *   且它自己写明"**绝不 spawn 子进程**"（引一个会 `execFileSync` 的模块更是反向操作）。
+ *   ⇒ 在本文件内实现同款逻辑，并在上面写明"与 plugin-io.js 的 resolveWardenMjs 同款"。
+ */
+export function resolveWardenMjs() {
+  const candidates = []
+  if (process.env.TASK_WARDEN_MJS) candidates.push(String(process.env.TASK_WARDEN_MJS))
+  const dshHome = process.env.DSH_HOME
+  if (dshHome) candidates.push(nodePath.join(dshHome, 'skills', 'task-warden', 'warden.mjs'))
+  try { candidates.push(nodePath.join(nodeOs.homedir(), '.dsh', 'skills', 'task-warden', 'warden.mjs')) } catch (e) { /* 取不到家目录就算了 */ }
+  for (const c of candidates) {
+    try { if (nodeFs.existsSync(c)) return c } catch (e) { /* 换下一个 */ }
+  }
+  return null
+}
+
+/** 占位形态：推不出真路径时给用户的**可自己填**的写法（**不是**作者机路径） */
+const WARDEN_MJS_PLACEHOLDER = '<你的 DSH_HOME>/skills/task-warden/warden.mjs'
+
+/**
+ * 拼"该跑的那条命令"：派生成功 ⇒ 用**他机器上的真实路径**；失败 ⇒ 占位形态 + 怎么填。
+ * `null` 时**不许**退回任何一台具体机器的路径（见 `resolveWardenMjs` 的注释）。
+ */
+export function wardenCmdFor() {
+  let mjs = null
+  try { mjs = resolveWardenMjs() } catch (e) { mjs = null }
+  if (mjs) return 'node ' + mjs
+  return 'node "' + WARDEN_MJS_PLACEHOLDER + '"'
+}
 
 export function allow() { return { kind: 'allow' } }
 

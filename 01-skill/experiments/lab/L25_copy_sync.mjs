@@ -21,6 +21,11 @@
  *   ④ `common.mjs` 的 `WARDEN` 常量**确实指向 repo 份**（防"以后有人把 lab 指到别处、又测了旧代码"）；
  *   ⑤ 对 `selftest.mjs` 做同样的 ①②③；
  *   ⑥ `common.mjs` 的 `SELFTEST` 常量也指向 repo 份（同一条道理，顺手一起守）。
+ *   ★ ①②③ 现在对 **PAIRS 里每一份**都跑（2026-09-24 起是 **10 份**）：
+ *     `warden.mjs` / `selftest.mjs` / `patch-pipeline.mjs` / `L37_patch_pipeline.mjs` /
+ *     `L38_majority_gate.mjs` / **`run-all.mjs`** / **`L39~L42` 那 4 个用例**。
+ *     后几份是**用例 / 套件入口**也各有一份拷贝 ⇒ 它们分叉时，跑绿的那一份可能不是
+ *     DSH 加载的那一份（I51 的形状）；`run-all.mjs` 分叉时更重 —— 连"哪 42 个在册"都会各说各话。
  *
  * ⚠ 两份真不同时，这个用例**就该 FAIL** —— 不许为了让用例变绿去改任何一份 `warden.mjs`。
  */
@@ -41,6 +46,29 @@ const SKILL_ROOT = path.join(DSH_HOME, 'skills', 'task-warden');
 const PAIRS = [
   { file: 'warden.mjs', skill: path.join(SKILL_ROOT, 'warden.mjs'), repo: path.join(REPO_ROOT, 'warden.mjs') },
   { file: 'selftest.mjs', skill: path.join(SKILL_ROOT, 'selftest.mjs'), repo: path.join(REPO_ROOT, 'selftest.mjs') },
+  // ★ 2026-09-24 扩（提问闸门查出，F1 的缺口）：`patch-pipeline.mjs`（R32 的机制）与它的用例
+  //   `L37_patch_pipeline.mjs` **各有两份拷贝**，却**不在这个守卫里** ——
+  //   形状就是 I51（lab 测了旧代码）：两份会分叉，而没有任何东西会报警。
+  { file: 'patch-pipeline.mjs', skill: path.join(SKILL_ROOT, 'patch-pipeline.mjs'), repo: path.join(REPO_ROOT, 'patch-pipeline.mjs') },
+  { file: 'L37_patch_pipeline.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'L37_patch_pipeline.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'L37_patch_pipeline.mjs') },
+  // ★ 2026-09-24 再扩（「审查」在 P-M2b 复验里实测出这个缺口，P-M3 修）：
+  //   `L38_majority_gate.mjs`（过半闸那条判据的用例）**同样有两份拷贝**，却不在守卫里 ——
+  //   形状与上面 L37 那条一样：两份会分叉，而没有任何东西会报警。
+  //   实测当时 PAIRS 只有 4 项（warden / selftest / patch-pipeline / L37），L38 不在其中。
+  { file: 'L38_majority_gate.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'L38_majority_gate.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'L38_majority_gate.mjs') },
+  // ★ 2026-09-24 再扩（P-M20 补，**这正是 P-M10 判 bad 的原因之一**）：
+  //   `run-all.mjs`（**套件自己的入口**）明明有**两份拷贝**，却**不在守卫里** ——
+  //   形状与上面几条一样：两份会分叉，而没有任何东西会报警。
+  //   ⚠ 后果比别的更重：run-all 分叉时，"哪 42 个用例在册 / 空壳怎么算"这一层会**各说各话**。
+  { file: 'run-all.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'run-all.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'run-all.mjs') },
+  // ★ 2026-09-24 再扩（P-M20）：`L39~L42` 这 4 个用例**也各有一份拷贝**（repo 份 + 装机份），
+  //   而它们刚被登记进 `run-all` 的 MODULES ⇒ 分叉时"跑绿的那一份"可能不是 DSH 加载的那一份（I51）。
+  //   实测：装机 lab 里原先**根本没有**这 4 个文件（`run-all` 一登记就 `ERR_MODULE_NOT_FOUND`），
+  //   是 P-M20 按"逐字节复制 repo 同名文件"补齐的 —— 补齐之后才谈得上"守"。
+  { file: 'L39_autonomy_switch.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'L39_autonomy_switch.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'L39_autonomy_switch.mjs') },
+  { file: 'L40_visible_speech.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'L40_visible_speech.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'L40_visible_speech.mjs') },
+  { file: 'L41_pipe_round2.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'L41_pipe_round2.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'L41_pipe_round2.mjs') },
+  { file: 'L42_window_scope.mjs', skill: path.join(SKILL_ROOT, 'experiments', 'lab', 'L42_window_scope.mjs'), repo: path.join(REPO_ROOT, 'experiments', 'lab', 'L42_window_scope.mjs') },
 ];
 
 function statOf(p) {
@@ -151,7 +179,7 @@ export default async function run() {
     status: ok ? 'PASS' : 'FAIL',
     pass: ok,
     reason: ok
-      ? '两份拷贝（warden.mjs / selftest.mjs）实读为逐字节一致（sha256 + 行数双重核对），且 common.mjs 的 WARDEN / SELFTEST 常量确实指向 DSH 真正加载的 skill 份 —— lab 测的就是那份代码。'
+      ? `两份拷贝（${PAIRS.map((p) => p.file).join(' / ')}）实读为逐字节一致（sha256 + 行数双重核对），且 common.mjs 的 WARDEN / SELFTEST 常量确实指向 DSH 真正加载的 skill 份 —— lab 测的就是那份代码。`
       : `有 ${bad.length} 项未通过：${bad.map((x) => x.name).join('；')}（两份真不同就该 FAIL，不许改 warden.mjs 去凑绿）`,
     checks: c.checks,
     skipped: c.skipped,
