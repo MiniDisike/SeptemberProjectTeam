@@ -186,46 +186,202 @@
 
 见 **[INSTALL.md](INSTALL.md)**（中英双语：装到哪、只改哪两处配置、四条自检、四个实测踩过的坑）。
 
+## 建议
+因为有资料员的查询角色存在，会经常进行搜索，建议给Agent的搜索任务安装免费的搜索插件或API。
+---
+# task-warden
+
+> A supervision layer for AI coding agents. It does not help you write code—it watches whether "what you asked for" and "what the AI delivered" are the same thing.
+
 ---
 
-## What it is (English)
+## What It Fixes
 
-A **supervision layer that sits outside an AI coding agent**. It does not write code for you — it
-watches whether *what you asked for* and *what got delivered* are the same thing.
+Three incidents that happen repeatedly in AI-assisted development and leave users worse off every time:
 
-Three failures keep happening, and each one costs you real work:
-
-| Failure | What it looks like |
+| Incident | Concrete Manifestation |
 |---|---|
-| **Requirement drift** | You ask for A; you get B; and B is "also something you'd need", so you can't even call it wrong |
-| **Faked acceptance** | An hour of work and a huge token bill; the key problem is half solved, and the final report is vague |
-| **Silent destruction of tuned work** | A day of hand-tuned feel or parameters is wiped out by the next feature, unrecoverably |
+| **Requirement drift** | You ask for A, but at the end you get B, and B is "also something used inside," and you cannot even say it is wrong |
+| **Acceptance fudging** | It runs for an hour, hundreds of millions of tokens, the key problem is only half solved, and finally it hands in a vague account |
+| **Tuned things silently broken** | A feel/parameter you spent a day tuning disappears when a new feature is added, and you cannot get it back |
 
-### How it works — four mechanical devices (not "reminding the AI to be careful")
+Typical scene: You want a polyhedral sphere and explain why; it comes back and asks you "1. Cube (recommended) 2. Polyhedron 3. Light sphere." With full permissions, it would just make the cube—when building a car you need one gear, it gives you a square and says it is done.
 
-| Device | What it does |
-|---|---|
-| **Verbatim requirement ledger** `.warden/SPEC.md` | Locks your **exact words** as `R#` entries, each with `必须` (must) and `不要` (must-not) lists. Reworded quotes get caught |
-| **`check`** | A round claims `done` but skipped a sub-item, left a `不要` unaddressed, or has no closing reconciliation ⇒ **exit 1**; you may not declare completion |
-| **Delivery gate `present`** | While any `不要` is unaddressed, or a `done` round has no reconciliation ⇒ **delivery is refused**. `check` is voluntary; the delivery gate is not |
-| **Pre-execution gate `edit`/`write`/shell | Modifying a *watched* value whose round is already `done`, with no snapshot since ⇒ **blocked on the spot**, with the exact command to run |
+---
 
-### Eight role seats
+## Project Overview
 
-Seven voting seats (**Supervisor / Reviewer / Recorder / Side-branch Gatekeeper / Attention
-Gatekeeper / Researcher / Direction**) plus one non-voting seat (`AI test user`). Roles speak
-**verbatim** (`name · title: exact words`) and may **not** be paraphrased by the main agent —
-paraphrasing is second-hand processing, and second-hand processing is where drift enters.
+- **Language**: JavaScript / Node.js (ES Modules, `.mjs` extension)
+- **Dependencies**: zero third-party npm dependencies, only Node built-in modules (`fs` / `path` / `os` / `zlib` / `crypto` / `child_process` / `url`)
+- **Runtime requirement**: Node 18+ (verified on Windows + Node 22/24)
+- **License**: MIT
+- **Runtime platform**: DeepSeek Harness (DSH)
 
-### What it does **NOT** do
+---
 
-- It **cannot** machine-decide whether a deliverable *semantically* violates a `不要`. A human must
-  judge the artifact. What it guarantees is that **every `不要` was explicitly addressed** — turning
-  *silent failure* into *a checkable statement*.
-- It does **not** think for you, and it does **not** stop you from changing requirements — it only
-  requires that a change be **stated**.
+## Directory Structure
 
-### Install
+```
+├── 01-skill/                          # Main script (the skill itself) + experiment bench
+│   ├── warden.mjs                     # ★ Main script (~6000 lines) — core supervision logic
+│   ├── bill.mjs                       # Cost calculation (real tokens from DSH session logs)
+│   ├── context-audit.mjs              # Context audit (count session characters by source)
+│   ├── selftest.mjs                   # ★ Self-test (~1500 lines, about 100 positive/negative controls)
+│   ├── SKILL.md                       # skill documentation
+│   └── experiments/lab/               # Experiment bench (L1~L20 regression cases)
+│       ├── L1_gear_vs_cube.mjs        # Gear experiment (ask for a gear, get a square)
+│       ├── L2_half_done.mjs           # Half-finished experiment
+│       ├── L4_frozen_baseline.mjs     # Frozen baseline (tuned thing gets broken)
+│       ├── L5_attribution_laundering.mjs  # Attribution laundering (AI-written passed off as user's original words)
+│       ├── L9_negation_flip.mjs       # Negation flip (defect written as "no problem")
+│       ├── L11_false_pass.mjs         # False pass
+│       ├── L18_fake_evidence.mjs      # Fake evidence
+│       └── ...                        # 20 experiments total
+│
+├── 02-preset-roles/                   # agent preset (8-seat role definitions)
+│   ├── preset.yml                     # preset metadata
+│   └── agent.cordis.yml               # ★ Complete agent preset (roles + hard actions)
+│
+├── 03-host-plugin/                    # Resident Host plugin
+│   ├── warden-watch.js                # ★ Resident Host half (auto-loads on restart)
+│   ├── gate.mjs                       # ★ Pre-execution gate (back up before changing something already confirmed done)
+│   ├── gate.selftest.mjs              # Gate self-test
+│   ├── plugin-io.js                   # Plugin external execution body
+│   └── preset-default-guard.mjs       # ★ Auto-enable guard (prevents preset from being changed)
+│
+└── 04-config/                         # Configuration fragments
+    ├── cordis.patch.yml               # patch layer (mount resident plugin)
+    └── settings-fragment.yaml         # settings.yaml fragment
+```
+
+---
+
+## Four Mechanical Devices (Core Mechanisms)
+
+Not relying on "reminding the AI to be self-disciplined," but on mechanical devices. Every rule has corresponding experimental evidence (L1~L20), and every real failure becomes a permanent regression case.
+
+### Device 1: Verbatim requirement ledger `.warden/SPEC.md`
+
+Locks the user's **original words** verbatim into `R#` entries, each with `must` / `must-not` lists. Rewritten original words are caught by the checker.
+
+Key point: only genuine user messages (`data.source.kind === "user"`) count; system injections do not—otherwise the AI could stuff in what it wrote itself and pass it off as "the user's original words."
+
+### Device 2: `check` command (self-check you run voluntarily)
+
+A round claims `done`, but misses sub-items, fails to address some "must-not," or lacks a closing reconciliation ⇒ **exit 1**, not allowed to declare completion.
+
+Two key criteria:
+- **Deliverable hits "must-not" = hard failure**: the delivery contains a "must-not" item the user stated (excluding legitimate references with negation prefixes)
+- **Every "must-not" must be addressed one by one**: when marking done, every "must-not" must explicitly declare how it was avoided (`--avoided "must-not item = how avoided"`), missing even one means rejection.
+
+### Device 3: Delivery gate `present` (non-voluntary)
+
+`check` is voluntary, but the delivery gate **is not**—as long as one "must-not" has not been addressed, or some `done` round has not been reconciled ⇒ **refuse delivery**, and the AI cannot get around it itself.
+
+### Device 4: Pre-execution gate `edit`/`write`/`shell` (blocks on the spot)
+
+If you want to modify a "watched parameter data" file, and the round it belongs to is already `done`, and it has not been backed up since then ⇒ **block on the spot**, and give the command that should be run.
+
+All six must match to deny (fail-open is a hard constraint: any internal exception is always allow—never let a tool call fail because "the warden is broken"):
+
+1. Tool name ∈ {edit, write}, and `file_path` in the arguments is a non-empty string
+2. Target file currently exists
+3. From the target file's directory upward, find the nearest layer with `.git`, and that layer must have `.warden/`
+4. Target file is named by `watches[].file` in that project's `.warden/params.yml`
+5. In that project's `.warden/ROUNDS.jsonl`, the latest round in the entire ledger has status `done`
+6. In `.warden/snapshots/`, there is no snapshot with `at` later than that done time
+
+---
+
+## Eight Role Seats
+
+7 seats with votes + 1 seat without votes:
+
+| Role | Title | Has Vote | Responsibility |
+|---|---|---|---|
+| Supervisor | Requirement Supervisor | Yes | Anchor to user's original words + ensure each role runs correctly |
+| Review | Evidence Reviewer | Yes | Evidence: is there evidence support? Does self-claim count? |
+| Record | Fact Recorder | Yes | Facts: are data/definitions/numbers correct? |
+| Branch Gatekeeper | Coverage Gatekeeper | Yes | Coverage: will some branch be dropped? |
+| Question Gate | User Attention Gatekeeper | Yes | User attention: is it worth taking up the user's time? |
+| Researcher | Source Verification Officer | Yes | External facts: has it been checked, is there a source? |
+| Direction | Engineering Direction Officer | Yes | Direction and impact scope |
+| AI Test User | Product User | **No** | Product comfort (opinions are predictions, not authorization) |
+
+Roles speak **verbatim displayed** (`Name · Title: original words`), **must not be paraphrased by the main agent**—paraphrasing is secondary processing, and secondary processing is the entry point for drift.
+
+---
+
+## Other Constraint Mechanisms
+
+- **Deviation declaration form**: wanting to change direction requires filling out a declaration form; the first option must be "do it as originally planned," and before the user responds the only recommendation can be 1. Changing without filling it out = hard failure
+- **Question gate**: two gates—the mechanical layer checks the user's already-answered original words and project documents; the brain layer dispatches an independent sub-agent to judge whether the user's attention should be taken up
+- **Auto-enable guard**: `agent-presets.default` in `settings.yaml` must equal `roles`; if changed, it will automatically change it back (two-strike rule prevents fake self-healing)
+- **Sub-item coverage check**: requirements that declare sub-items must cover all sub-items when marked done; half is not allowed as the whole
+- **Role roster drift audit**: the registry is the single source of truth; missing one means "some role can be silently ignored"
+- **Original-words claim gate**: connect what the user said (VOICE.jsonl) and what is being done (SPEC.md) with CLAIMS.jsonl
+- **Negation flip detection**: use character-level LCS diff to determine negation flips (defect written as "no problem")
+
+---
+
+## A Typical Workflow
+
+```
+Start    node warden.mjs needs  --last 5     → this round's requirement list (verbatim line by line + disposition + R# to do)
+Work     …（change code / dispatch sub-agents / look up sources）
+Record   node warden.mjs record --req R7 --status done --covered "…" --avoided "…"
+Self-check node warden.mjs check             → only exit 0 counts as passing; if not passing, not allowed to say "done"
+Wrap up  node warden.mjs results --last 5    → result list + line-by-line reconciliation (gaps listed openly)
+```
+
+---
+
+## Experiment Bench
+
+`01-skill/experiments/lab/` contains L1~L20, 20 experiments total. Each experiment has a **positive control** ("if you honestly do it, it must pass"—prevents cheating by "always rejecting"). Expected result: **16 PASS · 1 FAIL · 3 SKIP**.
+
+That one FAIL is L13: it asserts a **known real hole** (`--covered` only accepts sub-item names, does not bind evidence)—this is the current correct result, not a broken setup.
+
+---
+
+## Context Cost
+
+Three-layer injection architecture, intentionally avoiding injecting large amounts of content every round:
+
+1. **Fixed injection every round**: only the preset role discipline section, about 2–3KB
+2. **Triggered every round but not entering context**: resident plugin results go through host debug logs; only when a problem is found, push one UI card line
+3. **Enter context on demand**: command output has a cap (default latest 5 entries); do not dump the entire history in
+
+Design rationale: models ignore injected long context just as they ignore long documents. The project includes `context-audit.mjs` to count session character counts by source.
+
+---
+
+## What It **Cannot** Do (Honest Boundary)
+
+- **The machine cannot judge** "whether the deliverable semantically violates anything"—that requires a human judging the artifact. What it guarantees is that **every "must-not" has been explicitly responded to**, turning **silent failure** into a **checkable declaration**
+- **The shell gate is heuristic**: write actions rely on keyword recognition; bypass methods obviously exist
+- It **does not think for you**, and **does not stop you from changing requirements**—it only requires "if you changed it, say so clearly"
+- The **【proxy】** criterion in the role dashboard (character bigram isomorphism) **is not a hard criterion**; each item in the output is marked "requires human reading"
+
+**Overall**: It can block structural deviations (rewriting requirements, silent passing, quietly swapping, acceptance cheating, tuned things being broken), but cannot block semantic disguise—but it does not pretend it can; instead, everywhere it cannot judge, it marks "requires human reading." The last line of defense is still human eyes.
+
+---
+
+## Design Philosophy
+
+Not relying on "reminding the AI to be self-disciplined," but on mechanical devices. Real accident references can be seen everywhere in code comments (with dates and root-cause analysis), showing these rules were forced out by real accidents, not "I think it should be this way." Every real failure becomes a permanent regression case.
+
+---
+
+## Installation
+
+See **[INSTALL.md](INSTALL.md)** (bilingual Chinese-English: where to install, exactly which two configuration changes to make, four self-checks, four pitfalls actually encountered).
+
+## Suggestion
+
+Because the researcher role exists and will search frequently, it is recommended to install a free search plugin or API for the Agent's search tasks.
+
+
 
 See **[INSTALL.md](INSTALL.md)** (bilingual: where each part goes, the only two config edits, four
 self-checks, and four traps we actually hit).
