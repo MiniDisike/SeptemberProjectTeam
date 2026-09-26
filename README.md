@@ -381,7 +381,3 @@ See **[INSTALL.md](INSTALL.md)** (bilingual Chinese-English: where to install, e
 
 Because the researcher role exists and will search frequently, it is recommended to install a free search plugin or API for the Agent's search tasks.
 
-
-
-See **[INSTALL.md](INSTALL.md)** (bilingual: where each part goes, the only two config edits, four
-self-checks, and four traps we actually hit).
