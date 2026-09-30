@@ -698,11 +698,52 @@ check('㉔', '对 `ctx` 的访问**只有** `on(...)` 与 `effect(...)`（Proxy 
 check('㉔b', '**没有任何** systemPrompt / runtime context / 消息通道注册（ctx 属性一个都没碰）',
   B24.touched.every((t) => t.api === 'on' || t.api === 'effect') && forbiddenHits.length === 0,
   'forbidden-props-touched=' + JSON.stringify(forbiddenHits))
-check('㉔c', '只注册了 **4** 条监听（pre-execute / result / turn-stopping / pre-step）+ 1 个 effect',
-  B24.touched.filter((t) => t.api === 'on').length === 4
-  && B24.touched.filter((t) => t.api === 'on').map((t) => t.name).sort().join(',') === 'agent/pre-step,agent/turn-stopping,tools/pre-execute,tools/result'
+/**
+ * ★ 「孤儿欠账」修法带来的**判据同步**（4 → 6）。**这不是"放宽判据"**，理由逐条：
+ *   · ㉔c 管的是「**事件名清单一致性**」—— 它是上面那个**假红事故**的副产品
+ *     （见 `:687-691` 逐字："事件名单独用 ㉔c 断言"），**不是安全边界**。
+ *   · 真正不许动的是「**不许碰 ctx 属性**」，那条在 **㉔ / ㉔b**（`:695-700`）里，
+ *     实测全绿（`forbidden-props-touched=[]`）⇒ **那两条一个字都没改**。
+ *   · `:243` 逐字「**R43 返工新增的第 4 条监听**」⇒ 这个数字**本来就是随功能增长的**。
+ *   · 新加的两条是**官方**生命周期事件（宿主自己就这么用：
+ *     `dsh-agent-loop\lib\index.js:1607-1610`），用途是判"债主还在不在"。
+ * ⚠ 但 `=== 6` **不许变成"随便加"** ⇒ 配套新增 **㉔d**：名字集合**恰好等于**这 6 个，
+ *   再多一条就红，**必须连同这条判据一起改并说明理由**。
+ */
+const ON_NAMES_24 = B24.touched.filter((t) => t.api === 'on').map((t) => t.name).sort()
+const EXPECTED_ON_NAMES = ['agent/disposed', 'agent/pre-step', 'agent/turn-stopping', 'session/disposed', 'tools/pre-execute', 'tools/result']
+check('㉔c', '注册的监听**清单**与实现一致（**6** 条）+ 1 个 effect —— ⚠ 这条管**清单一致性**，安全边界在 ㉔/㉔b',
+  ON_NAMES_24.length === 6
+  && ON_NAMES_24.join(',') === EXPECTED_ON_NAMES.join(',')
   && B24.touched.filter((t) => t.api === 'effect').length === 1,
   JSON.stringify(B24.touched.filter((t) => t.api === 'on').map((t) => t.name)))
+/**
+ * ★ ㉔d（新增，与 ㉔c 的 4→6 **配套**）：**不许出现第 7 条监听**。
+ *   为什么单列一条：㉔c 只断"数量 == 6 且集合相等"，改 4→6 之后，**后人若再加一条**，
+ *   只要他把 6 改成 7 就又能过 —— 那正是"判据被慢慢放宽"。
+ *   这条把**逐字的事件名集合**钉死：任何新增都必须**显式改这一行并给出理由**。
+ *   ⚠ 它与 ㉔c 的差别是**意图**：㉔c 是"与实现同步"，㉔d 是"**钉住不许偷偷扩大监听面**"。
+ */
+check('㉔d', '★ 监听名集合**恰好**这 6 个（多一条就红 ⇒ 不许偷偷扩大监听面）',
+  ON_NAMES_24.join(',') === EXPECTED_ON_NAMES.join(',')
+  && ON_NAMES_24.length === EXPECTED_ON_NAMES.length
+  && B24.touched.filter((t) => t.api === 'effect').length === 1,
+  'actual=' + JSON.stringify(ON_NAMES_24) + ' expected=' + JSON.stringify(EXPECTED_ON_NAMES)
+  + ' onCount=' + ON_NAMES_24.length + ' effectCount=' + B24.touched.filter((t) => t.api === 'effect').length)
+
+/**
+ * ★ ㉔d-b（**负控，证明 ㉔d 不是恒真**）：把一个**多了一条监听**的假 ctx 喂给同一套判据
+ *   ⇒ ㉔d 的**判据表达式本身**必须为假。
+ *   为什么必要：㉔d 若写成"数量 >= 6"或者漏了比较**名字集合**，它就会对任何输入都为真 ——
+ *   那就是"看起来有闸、其实恒真"。这里**复算同一条件**，喂一个**已知该失败**的输入。
+ *   ⚠ 这是**夹具**：不装载真插件，只把 7 个名字喂进同一个比较式。
+ */
+const MUTATED_ON_NAMES = ['agent/created'].concat(EXPECTED_ON_NAMES).sort()
+check('㉔d-b', '**负控**：多一条监听（第 7 条）⇒ ㉔d 的判据**必须为假**（证明它不是恒真）',
+  !(MUTATED_ON_NAMES.join(',') === EXPECTED_ON_NAMES.join(',')
+    && MUTATED_ON_NAMES.length === EXPECTED_ON_NAMES.length),
+  'mutated=' + JSON.stringify(MUTATED_ON_NAMES) + ' ⇒ equals6=' + (MUTATED_ON_NAMES.join(',') === EXPECTED_ON_NAMES.join(','))
+  + ' lenEq=' + (MUTATED_ON_NAMES.length === EXPECTED_ON_NAMES.length))
 
 // ㉕ 可逆：dispose 后监听器全摘掉
 const B25 = makeFakeCtx()
@@ -713,8 +754,11 @@ const after = Array.from(B25.listeners.keys()).map((k) => k + ':' + B25.listener
 const totalAfter = Array.from(B25.listeners.values()).reduce((n, a) => n + a.length, 0)
 check('㉕', '**可逆**：dispose 后监听器**全摘掉**（计数归 0）',
   totalAfter === 0, 'before=[' + before + '] after=[' + after + ']')
-check('㉕b', '**可逆**：内存状态也清了（read/cur/pending/steers 全空）',
-  st25.read.size === 0 && st25.cur.size === 0 && st25.pending.size === 0 && st25.steers.size === 0)
+check('㉕b', '**可逆**：内存状态也清了（read/cur/pending/steers/**disposedSids** 全空）',
+  st25.read.size === 0 && st25.cur.size === 0 && st25.pending.size === 0 && st25.steers.size === 0
+  && st25.disposedSids.size === 0,
+  'read=' + st25.read.size + ' cur=' + st25.cur.size + ' pending=' + st25.pending.size
+  + ' steers=' + st25.steers.size + ' disposedSids=' + st25.disposedSids.size)
 let uninstallThrew = false
 try { mod.uninstall(st25); mod.uninstall(st25) } catch (e) { uninstallThrew = true }
 check('㉕c', '**可逆**：重复 dispose 安全（幂等，不抛）', !uninstallThrew)

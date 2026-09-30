@@ -69,6 +69,57 @@ Copy-Item <WORKSPACE>\task-warden\SKILL.md   <HOME>\.dsh\skills\task-warden\ -Fo
 
 ---
 
+## 3.5 ★ 单向流纪律（2026-09-30 加 —— 此前是一处**会导致静默丢改动**的坑）
+
+### 病根（实测，不是推测）
+
+上面那句「改完必须**同步过去**」写的是**动作**，没写**方向**。实测后果：
+
+| | 文件 | 当时状态 |
+|---|---|---|
+| 真正加载（部署副本） | `<HOME>\.dsh\.agent-presets\roles\team-guard.mjs` | **172248 B（9/30，最新）** |
+| 工程工作副本（权威源） | `<WORKSPACE>\task-warden\preset-roles\team-guard.mjs` | **145908 B（9/24，落后 564 行）** |
+
+而 `:65` 那条命令的方向是 **权威源 → 部署副本**。⇒ 任何人照着跑一次，
+**部署副本上 6 天的改动（R36 codeGate / brain 闸 / 分诊闸 / R44 命令形态修复）会被静默覆盖**，
+自检从 **197 条退回 164 条** —— 而那时它**照样报"全部通过"**。
+
+**这是本项目那句「没被 exit code 拦的都只是建议」的又一形态：覆盖成功了，没有任何东西会响。**
+
+### 现在的纪律（**方向唯一**）
+
+```
+权威源  <WORKSPACE>\task-warden\preset-roles\      ← 唯一真相，改这里
+   │                                                     或：把部署副本的改动**回流成补丁**再落这里
+   │  ① 载体同步（见 :65 的命令，方向：权威源 → 部署副本）
+   ▼
+部署副本 <HOME>\.dsh\.agent-presets\roles\    ← 产物，只由权威源生成
+```
+
+- **改动只有一个编辑面**：`preset-roles/`。**不要把部署副本当第二编辑面。**
+- 紧急情况下直接在部署副本上改了（例如闸拦着、必须先修）⇒ **必须回流**：
+  生成补丁 → 落到权威源 → 再跑一次载体同步。**回流前，部署副本的改动是"随时会没"的。**
+- **权威源有 git 回滚网**（2026-09-30 起，root commit `eca9592`）。
+  ⚠ 本仓库 `core.autocrlf=false` **是故意的** —— 这些是 LF 纯文件，
+  转成 CRLF 会改字节 ⇒ **别把它设回 true**。
+- **备份（`.bak-before-*`）留盘上、不进 git**（`.gitignore` 挡着）：
+  备份的价值在本地能回退，不在进版本库。
+
+### 怎么自查两边没漂（**一条命令，判据是 hash**）
+
+```powershell
+$a='<WORKSPACE>\task-warden\preset-roles'; $d='<HOME>\.dsh\.agent-presets\roles'
+foreach($f in 'team-guard.mjs','team-guard.selftest.mjs'){
+  $h1=(Get-FileHash "$a\$f" -Algorithm SHA256).Hash; $h2=(Get-FileHash "$d\$f" -Algorithm SHA256).Hash
+  "{0,-28} {1}" -f $f, $(if($h1 -eq $h2){'一致 ✓'}else{'★ 漂了 —— 别跑载体同步，先查方向'})
+}
+```
+
+⚠ **判据是 hash，不是"哪边新"**：文件时间戳会被复制/检出改掉，
+而上面那个坑的本质就是**新的一边被旧的一边覆盖**。**不一致就停下来查，不要"顺手同步一下"。**
+
+---
+
 ## 4. 怎么关掉 / 怎么调松
 
 同目录放一个可选的 `team-guard.json`（没有 = 用默认；**坏配置也回默认**，加固层自己坏了绝不能让 preset 挂不起来）：

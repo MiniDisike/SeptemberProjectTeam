@@ -926,6 +926,54 @@ check('㉕ 本闸门的 deny 理由**不印**三条硬规矩（那是 R43 `hando
 check('㉕ 本闸门自己的三条硬约束是**另一组**（fail-open / 非写工具零 IO / 补救路永不拦），在源码注释里',
   jsSrc.includes('fail-open') && jsSrc.includes('补救的路') && jsSrc.includes('非写工具'))
 
+// ── ㉖ ★ `cmd /c` 的 `/c` 不是路径（2026-09-30 实测洞：单字母旗标被当路径 ⇒ 误拦）
+/**
+ * 实测：`cmd /c "…\refresh_bg.cmd" 2>&1` 的 `/c` 被旧正则的 `\/` 分支当成路径提取，
+ *   理由里写着「要写的 `/c` 落在正在被细化的支线上」—— 而 `/c` 是 cmd.exe 的调用前缀。
+ * 修法：`\/` 分支要求 `/` 后面**至少 2 个字符**（`/c` 被排除，`/home/user` 保留）。
+ * 判据：deny 理由里**不出现** `` `/c` ``，且**出现**真实路径。
+ */
+section('㉖ ★ `cmd /c` 的 `/c` 不是路径（单字母旗标被当路径 ⇒ 误拦）')
+{
+  // 正控：cmd /c 命令（含 `>` 触发写检查）—— 理由里不该出现 `/c`
+  const cmdC = 'cmd /c "' + path.join(F_MAP, 'src', 'x.rs') + '" 2>&1'
+  const dC = D({ toolName: 'pwsh', toolArgs: { command: cmdC }, cwd: F_MAP, sessionId: 's26a' })
+  check('㉖ `cmd /c "…" 2>&1` 的 deny 理由里**不出现 `` `/c` ``**（`/c` 是 cmd.exe 旗标，不是路径）',
+    dC.kind !== 'deny' || !dC.reason.includes('`/c`'),
+    'kind=' + dC.kind + ' firstLine=' + (dC.reason || '').split('\n')[0])
+  check('㉖ `cmd /c "…" 2>&1` 的 deny 理由里**出现真实路径**（不是 `/c`）',
+    dC.kind !== 'deny' || dC.reason.includes('x.rs'),
+    'firstLine=' + (dC.reason || '').split('\n')[0])
+
+  // 正控：cmd /k 命令 —— 理由里不该出现 `/k`
+  const cmdK = 'cmd /k "echo hi" 2>&1'
+  const dK = D({ toolName: 'pwsh', toolArgs: { command: cmdK }, cwd: F_MAP, sessionId: 's26b' })
+  check('㉖ `cmd /k "echo hi" 2>&1` 的 deny 理由里**不出现 `` `/k` ``**',
+    dK.kind !== 'deny' || !dK.reason.includes('`/k`'),
+    'kind=' + dK.kind + ' firstLine=' + (dK.reason || '').split('\n')[0])
+
+  // 正控：cmd /d /c 双旗标 —— 理由里不该出现 `/d` 或 `/c`
+  const cmdDC = 'cmd /d /c echo hi 2>&1'
+  const dDC = D({ toolName: 'pwsh', toolArgs: { command: cmdDC }, cwd: F_MAP, sessionId: 's26c' })
+  check('㉖ `cmd /d /c echo hi 2>&1` 的 deny 理由里**不出现 `` `/d` `` 或 `` `/c` ``**',
+    dDC.kind !== 'deny' || (!dDC.reason.includes('`/d`') && !dDC.reason.includes('`/c`')),
+    'kind=' + dDC.kind + ' firstLine=' + (dDC.reason || '').split('\n')[0])
+
+  // 负控：真实 Unix 路径仍要被提取（理由里出现它）—— 证明修复没有过度排除
+  const cmdUnix = 'pwsh -c "Get-Content /home/user/file.txt > out.txt"'
+  const dUnix = D({ toolName: 'pwsh', toolArgs: { command: cmdUnix }, cwd: F_MAP, sessionId: 's26d' })
+  check('㉖ 负控 真实 Unix 路径 `/home/user/file.txt` 仍被提取（理由里出现它）',
+    dUnix.kind !== 'deny' || dUnix.reason.includes('/home/user/file.txt'),
+    'kind=' + dUnix.kind + ' firstLine=' + (dUnix.reason || '').split('\n')[0])
+
+  // 负控：Git Bash 风格 `/c/Windows/Temp` 仍被提取（多段路径，不是单字母旗标）
+  const cmdGit = 'git -C /c/Windows/Temp status 2>&1'
+  const dGit = D({ toolName: 'pwsh', toolArgs: { command: cmdGit }, cwd: F_MAP, sessionId: 's26e' })
+  check('㉖ 负控 Git Bash 风格 `/c/Windows/Temp` 仍被提取（理由里出现它）',
+    dGit.kind !== 'deny' || dGit.reason.includes('/c/Windows/Temp'),
+    'kind=' + dGit.kind + ' firstLine=' + (dGit.reason || '').split('\n')[0])
+}
+
 finish()
 
 function finish() {

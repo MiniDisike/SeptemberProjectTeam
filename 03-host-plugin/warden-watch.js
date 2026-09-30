@@ -25,7 +25,7 @@
  */
 const ROOT = process.env.WARDEN_ROOT || process.cwd()
 
-const VERSION = '1.0.0-loadmark'
+const VERSION = '1.0.2-driftheal'
 // ⚠ plugin-io.js 与它**放在同一个目录**（本包已带上它）—— 脑子A/B 都指出：
 //   原来它没随包发布，于是 CMD 指向一个不存在的文件 ⇒ 常驻插件那条刷新线是死的。
 const CMD = 'node ' + require('path').join(__dirname, 'plugin-io.js').split(require('path').sep).join('/')
@@ -158,6 +158,25 @@ try {
 } catch (e) {
   try {
     console.error('[warden-watch] 自动启用守卫没装上（退化为不检查）：' + String((e && e.message) || e))
+  } catch (_) { /* 算了 */ }
+}
+
+/**
+ * ★ drift-heal 自愈巡检（2026-09-29 接管 guardCheck）
+ *   事故出处：2026-09-28/29 DSH 升级把 settings.yaml 迁走 ⇒ preset-default-guard 每轮
+ *   ENOENT 打空（593 次 preset-default-error，一次没 heal 成）；又把 shell.run 移除 ⇒
+ *   turn 线每轮 TypeError（263 次 run-threw）。教训：巡检不能依赖会消失的文件、
+ *   会变化的 API。drift-heal 是**纯 fs、零 shell 依赖**的分层巡检：settings.yaml 在守它，
+ *   不在自动转守生效层（patch 的 agent-preset-registry）；顺带守六插件 insert 与
+ *   autonomy.json（R34 放权开关，用户 2026-09-29 拍板 on）。
+ *   装不上就退化回下面的老路径（只查 settings.yaml）——看守自己坏了绝不许影响轮次。
+ */
+let healModule = null
+try {
+  healModule = require('./drift-heal.mjs')
+} catch (e) {
+  try {
+    console.error('[warden-watch] drift-heal 没装上（退化为只查 settings.yaml）：' + String((e && e.message) || e))
   } catch (_) { /* 算了 */ }
 }
 
@@ -334,8 +353,17 @@ module.exports = {
      *   所以留痕不该等任何后续步骤 —— 哪怕下面任何一行抛了，留痕也已经如实写下。
      *   ⚠ 本插件**另有**一份自己的 `PLUGIN-LIVE.json`（写的是"账本读数"，不是"我加载了"），
      *     两者的**用途、内容、落点都不同** ⇒ 各写各的，**不合并**、也**不互相覆盖**
-     *     （`PLUGIN-LIVE.json` 的写作方是 `plugin-io.js`，本文件只读它，见下面 `readLiveSnapshot`）。 */
-    markPluginLoadedWithRetry('warden-watch', VERSION, ctx && ctx.id)
+     *     （`PLUGIN-LIVE.json` 的写作方是 `plugin-io.js`，本文件只读它，见下面 `readLiveSnapshot`）。
+     *   ⚠ **第 3 个实参 `hostId` 故意不传**（旧稿写 `ctx && ctx.id`）：在 cordis 4.0.2 上读 `ctx.id`
+     *     **不是"留一次痕迹"而是直接抛** `cannot get property "id" without inject`
+     *     （`@deepseek-ai/cordis/lib/index.js:675`；`Context` 上根本没有 `id` 这个属性，
+     *     属性表见 `cordis/lib/types/context.d.ts`）⇒ `apply()` 第一行就炸，
+     *     整条 composition 被记成 `1 entry did not activate`（2026-09-26 实测：
+     *     用户在 GUI 里加模型时屏幕上报的就是这一句）。
+     *     同批的另外 4 份（role-voices / handover-gate / branch-guard / report-spill）
+     *     早已是"不传"的写法，**只有本文件与 context-dedup 漏改**。
+     *     `hostId` 是可选参数 ⇒ 不传就**整个键都不出现**，留痕照常工作。 */
+    markPluginLoadedWithRetry('warden-watch', VERSION)
 
     const shell = ctx.shell
     // R36 用：工具给的 file_path 可能是相对路径。会话工作区不一定是 ROOT，两个基准都试。
@@ -358,6 +386,58 @@ module.exports = {
      */
     let guardStrikes = 0
     function guardCheck(trigger) {
+      /* ── drift-heal 自愈巡检（2026-09-29 接管；纯 fs 零 shell 依赖）────────────
+       * preset（settings.yaml + patch 层）沿用**两击规则**（连看两次才动手，防撕裂/陈旧读）；
+       * inserts 缺失 / autonomy 漂移是**硬事实**（单次 readFileSync 读到的就是事实），
+       * 不两击 —— 发现即修，每项写前备份、原子写。动作全部落 warden-watch-debug.jsonl。
+       */
+      if (healModule && typeof healModule.probe === 'function') {
+        try {
+          const paths = healModule.defaultPaths()
+          paths.settingsPath = (presetGuard && presetGuard.DEFAULT_SETTINGS) || paths.settingsPath
+          paths.presetGuard = presetGuard
+          const now = new Date()
+          const rep = healModule.probe({ ...paths, now })
+          const isPreset = (i) => i.check === 'settings-preset' || i.check === 'patch-preset'
+          const presetBad = rep.items.some((i) => isPreset(i) && (i.action === 'heal' || i.action === 'absent'))
+          const others = rep.items.filter((i) => (i.check === 'patch-inserts' || i.check === 'autonomy') && (i.action === 'heal' || i.action === 'rebuild'))
+          const errs = rep.items.filter((i) => i.action === 'error')
+          if (presetBad) {
+            guardStrikes += 1
+            if (guardStrikes < 2) {
+              watchLog({ at: now.toISOString(), ev: 'preset-default-suspect', trigger: trigger, strike: guardStrikes,
+                why: rep.items.filter(isPreset).map((i) => i.why).join('；').slice(0, 300) })
+            } else {
+              const r = healModule.healAll({ ...paths, now })
+              const w = r.written.filter((x) => x.check === 'patch' || x.check === 'autonomy')
+              watchLog({ at: now.toISOString(), ev: 'preset-default-healed', trigger: trigger, strike: guardStrikes,
+                checks: w.map((x) => x.check).join(','), backup: w.map((x) => x.backup).filter(Boolean).join(','),
+                writeMode: w.map((x) => x.writeMode).join(','), why: w.map((x) => x.why).join('；').slice(0, 400) })
+              guardStrikes = 0
+            }
+          } else if (rep.items.some((i) => isPreset(i) && i.action === 'ok')) {
+            if (guardStrikes > 0) guardStrikes = 0
+            watchLog({ at: now.toISOString(), ev: 'preset-default-ok', trigger: trigger, current: 'roles' })
+          }
+          if (others.length > 0) {
+            const r2 = healModule.healAll({ ...paths, now })
+            for (const item of r2.written) {
+              watchLog({ at: now.toISOString(), ev: 'heal-' + item.check, trigger: trigger,
+                action: String(item.actions || item.action || ''), backup: item.backup || null,
+                writeMode: item.writeMode || null, why: String(item.why || '').slice(0, 300) })
+            }
+          }
+          for (const e of errs) {
+            watchLog({ at: now.toISOString(), ev: 'heal-error', trigger: trigger, check: e.check, err: String(e.err || '').slice(0, 200) })
+          }
+          return
+        } catch (e) {
+          watchLog({ at: new Date().toISOString(), ev: 'heal-error', trigger: trigger,
+            err: String((e && e.message) || e).slice(0, 300) })
+          // drift-heal 自己抛了 ⇒ 落到下面的老路径兜底
+        }
+      }
+      /* ── 老路径（drift-heal 没装上时的退化）：只查 settings.yaml 的 preset 默认 ── */
       if (presetGuard === null || typeof presetGuard.ensureDefault !== 'function') return
       try {
         const pre = presetGuard.evaluateSettings(require('fs').readFileSync(presetGuard.DEFAULT_SETTINGS, 'utf8'))
@@ -387,6 +467,21 @@ module.exports = {
       guardCheck(trigger)
       if (running) { watchLog({ at: new Date().toISOString(), ev: 'refresh-skip', why: 'running', trigger: trigger, turn: turn }); return }
       if (trigger === 'turn' && (Date.now() - fpAt) < MIN_GAP_MS) { watchLog({ at: new Date().toISOString(), ev: 'refresh-skip', why: 'gap', trigger: trigger, turn: turn, gapMs: Date.now() - fpAt }); return }
+      /**
+       * ★ 2026-09-29：**shell 能力探测**（DSH 升级事故的教训之二）。
+       *   病根：DSH 升级把 `shell.run` 移除 ⇒ 原来直接 `shell.run(...)` 每轮抛
+       *   TypeError（263 次 run-threw，turn 账本检查线整体死掉，fails 累积）。
+       *   现在先探测：`shell.run` / `shell.resolve` 不在就记 `api-degraded` 并跳过
+       *   turn 线 —— 不再让整个 refresh 崩掉；`guardCheck` 的 fs 自愈巡检不经过
+       *   shell，照跑（这就是 drift-heal「零 shell 依赖」的意义）。
+       */
+      if (!shell || typeof shell.run !== 'function' || typeof shell.resolve !== 'function') {
+        watchLog({ at: new Date().toISOString(), ev: 'api-degraded', trigger: trigger, turn: turn,
+          why: 'shell.run/resolve 不可用（DSH 升级后 API 变了）—— turn 账本检查线跳过；fs 自愈巡检不受影响',
+          shellType: typeof shell,
+          shellKeys: shell ? Object.keys(shell).slice(0, 15).join(',') : String(shell) })
+        return
+      }
       running = true
       runs += 1
       const sid = session || '-'

@@ -593,6 +593,256 @@ export function wardenPath(env = process.env, home = os.homedir()) {
   return path.join(root, 'skills', 'task-warden', 'warden.mjs')
 }
 
+// ─────────────────────────────────────────────────── 命令形态识别（R44）
+
+/**
+ * 取出 `pwsh` / `bash` 工具调用里的命令串；不是这两种工具（或没有命令）⇒ `''`。
+ * @param {unknown} args
+ * @returns {string}
+ */
+export function commandOf(args) {
+  return args !== null && typeof args === 'object' && typeof args.command === 'string' ? args.command : ''
+}
+
+/**
+ * **认"调用形态"，不认"路径字面"** —— 这是 R44 修的那个洞。
+ *
+ * ## 为什么必须有这个函数（不许再退回字面正则）
+ *
+ * 原来的五个判据（`isRecordCall` / `isCheckCall` / `isDoneClaimCall` /
+ * `isBrainRecordCall` / `isEngagementCall`）都写成
+ * `/warden\.mjs["']?\s+record/` 这种**字面**正则。于是：
+ *
+ *   实测反例（2026-09-30，`_probe_regex.mjs`，本文件同目录）：
+ *   ```
+ *   $w = "...\warden.mjs"; node $w brain record --artifact x
+ *   ```
+ *   ⇒ `isBrainRecordCall` 返回 **false**。**五个判据全 false。**
+ *
+ * 后果不是"少记一笔"，而是**闸自己瞎了**：
+ *   · `isBrainRecordCall` 假阴性 ⇒ `st.brainEngaged` 永不置位 ⇒
+ *     **真派过脑子的会话，`present` 照样被拦**（把做对的当没做）；
+ *   · `isDoneClaimCall` 假阴性 ⇒ `record --status done` 认不出来 ⇒
+ *     "声称 done 必须先过 check"这道闸**对变量写法完全失效**（该拦的不拦）。
+ *   两条同时成立 ⇒ **一个用来防"自夸"的闸，被"路径写法"无声绕过**。
+ *   这与本项目那句「写进代码 ≠ 拦得住」是同一类：**闸的判据栽在形式上**。
+ *
+ * ## 判据（窄，且不依赖路径怎么拼）
+ *
+ * 把命令切成 token 后，找一处**入口 token**满足其一：
+ *   · basename 形如 `warden.mjs`（任何目录、任何引号）—— 与旧行为**兼容超集**；
+ *   · **变量引用**（`$w` / `${w}` / `$env:W` / `%W%`）—— 这是本次新增的那一类。
+ * 且入口处在**调用位**：
+ *   · 它前面是启动器（`node` / `node.exe` / `bun` / `deno` / `tsx` / `pwsh -File` 等），或
+ *   · 它就在语句开头（`./warden.mjs record …` 这种 shebang 直跑）。
+ * 然后要求**子命令 token 按顺序**出现在入口**之后**、且**不跨语句分隔符**（`;` `|` `&&` `||`）。
+ *
+ * ⚠ **为什么变量也算**：变量在"命令被写下"这一刻**就是不可判的**
+ *   （`$w` 可能指向任何东西）。这里做的取舍是**方向性**的，与本项目
+ *   「宁可吵，不许静默」一致：
+ *   · 认变量 ⇒ 最坏是**假阳性**（没真跑也放行）——有界、可发现（还有 `check` 的真实判决兜底）；
+ *   · 不认变量 ⇒ **假阴性**，即上面那种"闸瞎了"，**且静默**。
+ *   ⇒ 取假阳性那一边。**这不是"更安全"，是"错得看得见"。**
+ *
+ * ⚠ 仍然**不认**"整条命令串里出现过 warden 字样"（那才是真变松）：
+ *   子命令 token 必须落在**同一次调用**里，`grep warden.mjs record` / `echo warden.mjs record`
+ *   这类"提到"不算 —— 见 selftest 的负控。
+ *
+ * @param {string} cmd 整条命令串
+ * @param {string[]} sub 子命令 token（如 `['brain','record']`）
+ * @returns {boolean}
+ */
+export function isWardenInvocation(cmd, sub) {
+  return findWardenInvocation(cmd, sub) !== null
+}
+
+/**
+ * 同上，但**返回那一次调用的参数串**（`--status done` 这类需要绑定到同一次调用时用）。
+ * @param {string} cmd
+ * @param {string[]} sub
+ * @returns {{entry:string, args:string}|null}
+ */
+export function findWardenInvocation(cmd, sub) {
+  if (typeof cmd !== 'string' || cmd === '') return null
+  const binds = collectBindings(cmd)
+  const segs = splitStatements(cmd)
+  for (const seg of segs) {
+    const toks = tokenizeSegment(seg)
+    for (let i = 0; i < toks.length; i += 1) {
+      if (!isWardenEntry(toks[i], binds)) continue
+      if (!inCallPosition(toks, i)) continue
+      // 子命令必须**紧随入口之后**、按顺序匹配（跳过 `--flag=value` 形态的选项不影响，
+      // 因为子命令在 warden.mjs 的语法里永远紧跟入口）。
+      let k = i + 1
+      let ok = true
+      for (const s of sub) {
+        while (k < toks.length && toks[k].startsWith('-')) k += 1 // 容忍入口与子命令间的选项
+        if (k >= toks.length || toks[k] !== s) { ok = false; break }
+        k += 1
+      }
+      if (!ok) continue
+      return { entry: toks[i], args: toks.slice(i + 1).join(' ') }
+    }
+  }
+  return null
+}
+
+/**
+ * 收集命令串里**肉眼可见的变量绑定**（`$w = "x.mjs"` / `W=x.mjs` / `set W=x`）。
+ *
+ * ⚠ 为什么要这一步：变量在"命令被写下"这一刻**本来是不可判的**。R44 的取舍是
+ *   「宁可假阳性，不许静默假阴性」（见 `isWardenInvocation` 注释）。但**能看见绑定时
+ *   就不该装看不见** —— 实测负控：
+ *   `$x = "other.mjs"; node $x brain record` 若也认，那"认变量"就退化成
+ *   "任何变量 + 任何子命令词都算"，闸会变松而不是变准。
+ *   所以规则是：**看得见绑定 ⇒ 按绑定判；看不见 ⇒ 才按"未知变量"放过**。
+ * @param {string} cmd
+ * @returns {Map<string,string>} 变量名（不含 `$`）→ 绑定的字面值
+ */
+function collectBindings(cmd) {
+  const map = new Map()
+  // ⚠ `\$?` 不能省：漏了它就抓不到 `$x = "other.mjs"`（实测 —— 正则在 `$` 上卡住，
+  //   绑定收不进 map ⇒ 负控「非 warden 入口 + 变量」失效）。
+  const re = /(?:^|[;\n&|]|\s)\$?(?:env:)?([A-Za-z_]\w*)\s*=\s*("([^"]*)"|'([^']*)'|`([^`]*)`|([^\s;|&]+))/g
+  let m
+  while ((m = re.exec(cmd)) !== null) {
+    const name = m[1]
+    const val = m[3] !== undefined ? m[3] : m[4] !== undefined ? m[4] : m[5] !== undefined ? m[5] : m[6]
+    if (typeof val === 'string' && val !== '') map.set(name, val)
+  }
+  return map
+}
+
+/**
+ * 入口 token 判据：basename 形如 `warden.mjs`，**或**是一个（绑定未知的）变量引用。
+ *
+ * ⚠ 变量分支的两级判据（R44 负控逼出来的）：
+ *   · **有可见绑定** ⇒ 绑定值的 basename 必须是 `warden.mjs`（`$x="other.mjs"` 不算）；
+ *   · **无可见绑定** ⇒ 放过（认出"这一次调用"，见 `isWardenInvocation` 的方向性论证）。
+ * @param {string} tok
+ * @param {Map<string,string>} [binds]
+ * @returns {boolean}
+ */
+function isWardenEntry(tok, binds) {
+  const t = stripQuotes(tok)
+  if (t === '') return false
+  // ① 直呼其名（任意目录 / 任意引号）
+  const base = t.replace(/\\/g, '/').split('/').pop() || ''
+  if (/^warden\.mjs$/i.test(base)) return true
+  // ② 变量引用：`$w` `${W}` `$env:WARDEN` `%WARDEN%` `@w`
+  let name = null
+  let mm = /^\$\{?([A-Za-z_]\w*)\}?$/.exec(t)
+  if (mm) name = mm[1]
+  if (name === null) { mm = /^\$env:([A-Za-z_]\w*)$/i.exec(t); if (mm) name = mm[1] }
+  if (name === null) { mm = /^%([A-Za-z_]\w*)%$/.exec(t); if (mm) name = mm[1] }
+  if (name === null) { mm = /^@([A-Za-z_]\w*)$/.exec(t); if (mm) name = mm[1] }
+  if (name === null) return false
+  if (binds && binds.has(name)) {
+    // 看得见绑定 ⇒ 必须真的是 warden.mjs（`$x = "other.mjs"` 不许混进来）
+    const v = String(binds.get(name)).replace(/\\/g, '/').split('/').pop() || ''
+    return /^warden\.mjs$/i.test(v)
+  }
+  return true // 绑定不可见 ⇒ 放过（方向性取舍）
+}
+
+/**
+ * 入口是否处在**调用位**（前面是启动器，或就在语句开头）。
+ * @param {string[]} toks
+ * @param {number} i
+ * @returns {boolean}
+ */
+function inCallPosition(toks, i) {
+  if (i === 0) return true // `./warden.mjs record …`（shebang 直跑）
+  const prev = stripQuotes(toks[i - 1]).replace(/\\/g, '/').split('/').pop() || ''
+  const launchers = new Set(['node', 'node.exe', 'bun', 'deno', 'tsx', 'ts-node', 'npx', 'pwsh', 'powershell', 'bash', 'sh', 'cmd', 'cmd.exe'])
+  if (launchers.has(prev.toLowerCase())) return true
+  // `pwsh -File <x>` / `node --experimental-x <entry>`
+  if (prev.startsWith('-') && i >= 2) {
+    const p2 = stripQuotes(toks[i - 2]).replace(/\\/g, '/').split('/').pop() || ''
+    if (launchers.has(p2.toLowerCase())) return true
+  }
+  return false
+}
+
+/** 去掉成对引号（`"` `'` 反引号）。@param {string} s @returns {string} */
+function stripQuotes(s) {
+  const t = String(s)
+  if (t.length >= 2) {
+    const a = t[0]
+    const b = t[t.length - 1]
+    if ((a === '"' && b === '"') || (a === "'" && b === "'") || (a === '`' && b === '`')) {
+      return t.slice(1, -1)
+    }
+  }
+  return t
+}
+
+/**
+ * 按语句分隔符切（`;` `|` `&&` `||` 换行），**不切引号内的**，并**丢掉注释**。
+ *
+ * ⚠ 丢注释是 R44 负控逼出来的：`cat script.sh  # node warden.mjs brain record`
+ *   若不去注释，注释里的 `warden.mjs brain record` 会被当成一次真调用 ⇒
+ *   **"读一个提到 warden 的文件"就解锁了闸**。注释不是命令。
+ * @param {string} cmd
+ * @returns {string[]}
+ */
+function splitStatements(cmd) {
+  const out = []
+  let cur = ''
+  let q = null
+  for (let i = 0; i < cmd.length; i += 1) {
+    const c = cmd[i]
+    if (q !== null) {
+      if (c === q) q = null
+      cur += c
+      continue
+    }
+    // `#` 在词首/空白后 ⇒ 注释到行尾（`#` 在词中如 `a#b` 不算）
+    if (c === '#' && (cur === '' || /\s$/.test(cur))) {
+      while (i < cmd.length && cmd[i] !== '\n') i += 1
+      out.push(cur)
+      cur = ''
+      continue
+    }
+    if (c === '"' || c === "'" || c === '`') { q = c; cur += c; continue }
+    if (c === ';' || c === '\n' || c === '|' || c === '&') {
+      out.push(cur)
+      cur = ''
+      if (c === '|' && cmd[i + 1] === '|') i += 1
+      if (c === '&' && cmd[i + 1] === '&') i += 1
+      continue
+    }
+    cur += c
+  }
+  out.push(cur)
+  return out
+}
+
+/**
+ * 把一个语句切成 token（尊重引号；引号本身保留在 token 里，由 `stripQuotes` 处理）。
+ * @param {string} seg
+ * @returns {string[]}
+ */
+function tokenizeSegment(seg) {
+  const toks = []
+  let cur = ''
+  let q = null
+  const push = () => { if (cur !== '') { toks.push(cur); cur = '' } }
+  for (let i = 0; i < seg.length; i += 1) {
+    const c = seg[i]
+    if (q !== null) {
+      cur += c
+      if (c === q) q = null
+      continue
+    }
+    if (c === '"' || c === "'" || c === '`') { q = c; cur += c; continue }
+    if (c === ' ' || c === '\t' || c === '\r') { push(); continue }
+    cur += c
+  }
+  push()
+  return toks
+}
+
 // ─────────────────────────────────────────────────────────── 文本
 
 /**
@@ -1037,8 +1287,8 @@ export function triageGateReason(warden = wardenPath(), topics = []) {
 export function isEngagementCall(toolName, args) {
   if (toolName === 'subagent_liaison' || toolName === 'subagent_direction') return true
   if (toolName !== 'pwsh' && toolName !== 'bash') return false
-  const cmd = args !== null && typeof args === 'object' && typeof args.command === 'string' ? args.command : ''
-  return /warden\.mjs["']?\s+(?:role\s+say|find\s+add)\b/.test(cmd)
+  const cmd = commandOf(args)
+  return isWardenInvocation(cmd, ['role', 'say']) || isWardenInvocation(cmd, ['find', 'add'])
 }
 
 /**
@@ -1049,8 +1299,7 @@ export function isEngagementCall(toolName, args) {
  */
 export function isRecordCall(toolName, args) {
   if (toolName !== 'pwsh' && toolName !== 'bash') return false
-  const cmd = args !== null && typeof args === 'object' && typeof args.command === 'string' ? args.command : ''
-  return /warden\.mjs["']?\s+record/.test(cmd)
+  return isWardenInvocation(commandOf(args), ['record'])
 }
 
 /**
@@ -1061,8 +1310,7 @@ export function isRecordCall(toolName, args) {
  */
 export function isCheckCall(toolName, args) {
   if (toolName !== 'pwsh' && toolName !== 'bash') return false
-  const cmd = args !== null && typeof args === 'object' && typeof args.command === 'string' ? args.command : ''
-  return /warden\.mjs["']?\s+check/.test(cmd)
+  return isWardenInvocation(commandOf(args), ['check'])
 }
 
 /**
@@ -1074,8 +1322,11 @@ export function isCheckCall(toolName, args) {
  */
 export function isDoneClaimCall(toolName, args) {
   if (toolName !== 'pwsh' && toolName !== 'bash') return false
-  const cmd = args !== null && typeof args === 'object' && typeof args.command === 'string' ? args.command : ''
-  return /warden\.mjs["']?\s+record\b/.test(cmd) && /--status\s+done/.test(cmd)
+  const inv = findWardenInvocation(commandOf(args), ['record'])
+  if (inv === null) return false
+  // ★ `--status done` 必须落在**同一次调用**的参数里，不是整条命令串里随便哪一处。
+  //   否则 `node warden.mjs check; node other.mjs record` + 别处的 `--status done` 会假阳。
+  return /--status[=\s]+done\b/.test(inv.args)
 }
 
 /**
@@ -1086,8 +1337,7 @@ export function isDoneClaimCall(toolName, args) {
  */
 export function isBrainRecordCall(toolName, args) {
   if (toolName !== 'pwsh' && toolName !== 'bash') return false
-  const cmd = args !== null && typeof args === 'object' && typeof args.command === 'string' ? args.command : ''
-  return /warden\.mjs["']?\s+brain\s+record/.test(cmd)
+  return isWardenInvocation(commandOf(args), ['brain', 'record'])
 }
 
 /**
@@ -1787,6 +2037,223 @@ export function readPendingVotes(cwd) {
   return pending
 }
 
+/**
+ * ★ 2026-09-26：**分歧检测** —— 读 `FINDINGS.jsonl`，找出对同一 `ref` 有 ≥2 个角色发言、
+ * 但 `VOTES.jsonl` 里没有对应 `topic` 的 `ref`。
+ *
+ * 用途：在 `statusText` 里提示"该开投票了" —— 角色自行讨论时产生分歧，
+ * **不需要主代理手动发现**，插件自己检测到并在每步状态里提示。
+ *
+ * ⚠ **只做"检测 + 提示"，不做"自动投票"** —— 投票需要角色**思考**（从职责出发给选择 + 理由），
+ * 脚本只计票不判断。这里的提示让主代理看到后**派各角色投票**，不是替角色投。
+ *
+ * ⚠ **"≥2 个角色发言" ≠ "有分歧"** —— 两个角色可能说的是同一件事的不同侧面（互补 ≠ 分歧）。
+ * 但"有分歧"需要语义理解，脚本做不到。这里取**充分条件**：≥2 个角色发言 + 没有投票
+ * ⇒ **可能**有分歧 ⇒ 提示"该开投票了"，让主代理/角色自己判断是否真有分歧。
+ * 这比"自动判分歧"更可靠，也符合"脚本只计票不判断"的原则。
+ *
+ * ⚠ 性能：只读 `FINDINGS.jsonl` 最后 200 行（只关心最近的发言）。
+ *
+ * 返回 `[{ref, roles: [角色名...]}]` —— 有分歧嫌疑但无投票的 ref 列表（最多 5 条）。
+ */
+export function detectDivergence(root) {
+  if (typeof root !== 'string' || root.length === 0) return []
+  const findingsPath = path.join(root, '.warden', 'FINDINGS.jsonl')
+  if (!existsFile(findingsPath)) return []
+  let lines
+  try { lines = fs.readFileSync(findingsPath, 'utf8').split('\n') } catch { return [] }
+  const recent = lines.filter((l) => l.trim()).slice(-200)
+  const byRef = new Map()
+  for (const line of recent) {
+    let f
+    try { f = JSON.parse(line) } catch { continue }
+    if (!f || typeof f.ref !== 'string' || !f.ref || typeof f.by !== 'string' || !f.by) continue
+    if (!byRef.has(f.ref)) byRef.set(f.ref, new Set())
+    byRef.get(f.ref).add(f.by)
+  }
+  const votesPath = path.join(root, '.warden', 'VOTES.jsonl')
+  const votedTopics = new Set()
+  if (existsFile(votesPath)) {
+    let vlines
+    try { vlines = fs.readFileSync(votesPath, 'utf8').split('\n') } catch { vlines = [] }
+    for (const line of vlines) {
+      if (!line.trim()) continue
+      let v
+      try { v = JSON.parse(line) } catch { continue }
+      if (v && typeof v.topic === 'string') votedTopics.add(v.topic)
+    }
+  }
+  const divergent = []
+  for (const [ref, roles] of byRef) {
+    if (roles.size >= 2 && !votedTopics.has(ref)) {
+      divergent.push({ ref, roles: Array.from(roles) })
+    }
+  }
+  return divergent.slice(0, 5)
+}
+
+/**
+ * ★★ 2026-09-30：**待决选择检测** —— 取代 `detectDivergence` 作为提示来源。
+ *
+ * ## 为什么换掉 `detectDivergence`（实测，不是推测）
+ *
+ * 用户报「角色投票出现的次数很少，除了我主动提基本没出现过」。实测根因**不是闸坏了**：
+ * `detectDivergence` 实调返回 5 条、`statusText` 实渲染确实把那行印进了模型每步上下文。
+ * **是判据选错了地方**：
+ *
+ *   · 它的触发条件是「**≥2 个角色对同一 ref 发过言**」——
+ *     而本项目里**任何协作**都是 `资料员 + 方向员` 一起发言 ⇒ 21 个 ref 全部命中，
+ *     其中 **13 个从未投票**；
+ *   · 被点名的 5 个 ref（R12/R15/R16/R17/R18）逐条按 `kind` 分类：
+ *     **事实=40/38/6/24/9，提案=0** —— **100% 是事实，没有"选项"**。
+ *     **事实没有可投的项**：你没法对"gpu.rs 画不出任意四边形"投票。
+ *   · ⇒ 提示变成**每步重复、3 天不变、且不拦任何动作**的一行字 = 噪音，
+ *     模型学会无视它（本项目那句「没被 exit code 拦的都只是建议」的又一形态）。
+ *
+ * ## 更要命的盲区（这才是有价值的那一半）
+ *
+ * 旧判据**只能发现"两个人在说话"**，发现不了**"一个人替所有人做了决定"**：
+ * 实测 R39 下 **方向员单方面下了 7 条「裁决」**（布局真源 / 依赖边 / 指针通路 /
+ * 键鼠归属 / 会红的判据 / **出厂装 4 个视口** / 四格相机差异），**一条都没投票** ——
+ * 其中第 ⑦ 条**自己逐字写着「也不新开议题」**（它意识到这是个决定，然后自己决定不开议题）。
+ * 这些每条只有**一个**角色发言 ⇒ 旧判据**永远看不到它们**。
+ *
+ * ## 新判据：找**可选项**，不找"谁说过话"
+ *
+ * 三条触发（**都是可机检的，不需要语义理解** —— 保持"脚本只计票不判断"原则）：
+ *
+ *   · `verdict` —— **单方面裁决**：出现「裁决 / 定案 / 拍板 / 不新开议题 / 就这么定」等
+ *     决定词，且该 ref 没有投票 ⇒ 提示"这条是单方面定的，要确认吗"。
+ *   · `options` —— **互斥方案共存**：同一 ref 下出现「甲…乙…」/「A 方案…B 方案」/
+ *     「要么…要么」/「二选一」等**并列选项**，且无投票 ⇒ 这是天生的投票题。
+ *   · `reversal` —— **撤回/更正**：出现「撤回 / 更正 / 我错了 / 以本条为准」——
+ *     存在过摇摆 ⇒ 值得固化成票（否则同一个人下次还会再改一遍）。
+ *
+ * ⚠ **仍然不做"自动投票"**：这里只**把人该看的东西翻出来**，投不投、投什么由角色定。
+ *
+ * ## 噪音控制（不做这个，新提示会被老提示淹掉）
+ *
+ * 每条带 `ageDays`（按该 ref **最早**发言算）。`statusText` 据此**折叠**：
+ * 新的（`ageDays < 0.5`）逐条列，旧的压成一行计数 —— 见 `statusText` 里的用法。
+ *
+ * 返回 `[{ref, kind, who, ageDays, sample}]`，按 `ageDays` 升序（新的在前）。
+ * @param {string} root 工程根
+ * @returns {Array<{ref:string, kind:string, who:string, ageDays:number, sample:string}>}
+ */
+export function detectPendingDecisions(root) {
+  if (typeof root !== 'string' || root.length === 0) return []
+  const findingsPath = path.join(root, '.warden', 'FINDINGS.jsonl')
+  if (!existsFile(findingsPath)) return []
+  let lines
+  try { lines = fs.readFileSync(findingsPath, 'utf8').split('\n') } catch { return [] }
+  // 只读尾部（性能；与旧判据同口径）
+  const recent = lines.filter((l) => l.trim()).slice(-400)
+
+  // 已投票的 topic（含"ref 出现在 topic 里"的宽松匹配 —— 议题名常带后缀，如 `R39-T1-…`）
+  const votedTopics = []
+  const votesPath = path.join(root, '.warden', 'VOTES.jsonl')
+  if (existsFile(votesPath)) {
+    let vlines = []
+    try { vlines = fs.readFileSync(votesPath, 'utf8').split('\n') } catch { vlines = [] }
+    for (const line of vlines) {
+      if (!line.trim()) continue
+      let v
+      try { v = JSON.parse(line) } catch { continue }
+      if (v && typeof v.topic === 'string' && v.topic) votedTopics.push(v.topic)
+    }
+  }
+  const hasVoteFor = (ref) => votedTopics.some((t) => t === ref || t.includes(ref))
+  /**
+   * ⚠ **粒度**：`hasVoteFor` 是"整个 ref 层面"的判据（`R39-T1` 投过 ⇒ R39 就算投过）。
+   *   实测踩过：R39 下有 12 条 `裁决`（含那条逐字写「也不新开议题」的出厂视口数），
+   *   但因为 `R39-T1-默认笔宽…` 投过票 ⇒ **整个 R39 被跳过，12 条裁决一条都没露出来**。
+   *   ⇒ 所以**裁决/方案类**还要再看一层：**有没有哪条票是冲着"这个决定"来的**。
+   *   判据仍然是机检的：把裁决句里最像"题面"的一段（前 12 个字里的实词）去比对 topic。
+   *   比对不上 ⇒ 这条裁决**没被投过** ⇒ 该提示。
+   */
+  const voteCoversDecision = (sample) => {
+    // 取样本里的中文/字母实词片段（≥3 字），看有没有出现在任何 topic 里
+    const frags = (sample.match(/[\u4e00-\u9fa5A-Za-z]{3,12}/g) || []).slice(0, 8)
+    return frags.some((fr) => votedTopics.some((t) => t.includes(fr)))
+  }
+
+  // 三条触发的词表（**可机检**，不含语义判断）
+  // ⚠ 词表 + **位置**是实测调出来的，不是拍脑袋。第一版只查"文本里有没有这个词"，
+  //   跑出 3/4 假阳。实测出的**判别位**（这组数字是跑出来的，不是估的）：
+  //
+  //     【真裁决】方向员「R39块0'b裁决⑦出厂装几个视口…」  触发词在第 **7** 字
+  //     【真裁决】方向员「R39块0'b裁决②依赖边：…」        触发词在第 **7** 字
+  //     【假阳】资料员「DPI-aware 实测定案（探针…」       在第 12 字 —— "**实测**定案"是**事实**的定案
+  //     【假阳】资料员「【P-WINRECT 交付·…证据很硬】①根因更正…」 在 第 **805** 字 —— 埋在正文里顺带提及
+  //     【假阳】资料员「★ 补一条更强的佐证（主代理读规格 §9…」   在 第 **249** 字 —— 同上
+  //
+  //   ⇒ 判据 = **决定词出现在开头**（前 40 字）+ 不是"事实定案"那类词。
+  //     为什么位置能分开：一条**裁决**是"我决定 X"，决定词必然在句首；
+  //     而**事实报告**只在叙述到某处时顺嘴提到"更正/裁决"。
+  //     这是启发式，**命中 ≠ 证明有决定要投，没命中 ≠ 没有**（同 `role scan` 的免责口径）。
+  const HEAD = 40
+  const headOf = (t) => t.slice(0, HEAD)
+  const RE_VERDICT_HEAD = /裁决|定案|拍板|就这么定|不新开议题|不开议题|决定就是/
+  // 事实层的"定案/更正"（假阳源）—— 这些**不算**决定
+  const RE_FACT_ONLY = /实测定案|实测更正|口径更正|根因更正|数字更正|证据很硬/
+  const RE_OPTIONS = /甲[、，].{0,30}乙|乙[、，].{0,30}甲|[A-D]\s*方案.{0,40}[A-D]\s*方案|要么.{1,40}要么/
+  const RE_REVERSAL = /撤回上一轮|撤回上一条|更正条|以本条为准|上一条.{0,20}截断|本条是完整版/
+
+  const byRef = new Map()
+  for (const line of recent) {
+    let f
+    try { f = JSON.parse(line) } catch { continue }
+    if (!f || typeof f.ref !== 'string' || !f.ref) continue
+    const text = typeof f.text === 'string' ? f.text : ''
+    if (!text) continue
+    if (!byRef.has(f.ref)) byRef.set(f.ref, [])
+    byRef.get(f.ref).push({ by: String(f.by || ''), at: Date.parse(String(f.at || '')) || 0, text })
+  }
+
+  const now = Date.now()
+  const out = []
+  for (const [ref, items] of byRef) {
+    const refVoted = hasVoteFor(ref)
+    const roles = new Set(items.map((i) => i.by).filter(Boolean))
+    const earliest = Math.min(...items.map((i) => i.at).filter((n) => n > 0).concat([now]))
+    const ageDays = Math.max(0, (now - earliest) / 86400000)
+
+    // 触发 ①：单方面裁决（**一个人**下的决定词 —— 这正是旧判据的盲区）
+    //   ⚠ 裁决类**不因"整个 ref 投过票"就跳过**（见 voteCoversDecision 注释），
+    //     要逐条看"这一条决定"有没有被投过。
+    //   ⚠ 判据 = **决定词在开头**（HEAD 字内）+ **不是"事实定案"**（见上面实测的判别位）
+    const verdictItem = items
+      .filter((i) => RE_VERDICT_HEAD.test(headOf(i.text)) && !RE_FACT_ONLY.test(headOf(i.text)))
+      .slice(-1)[0]
+    if (verdictItem) {
+      const sample = verdictItem.text.replace(/\s+/g, ' ').slice(0, 120)
+      if (!voteCoversDecision(sample)) {
+        out.push({ ref, kind: 'verdict', who: verdictItem.by, ageDays, sample })
+        continue
+      }
+    }
+    // 触发 ②：互斥方案共存（**天生的投票题**）
+    const optItem = items.filter((i) => RE_OPTIONS.test(i.text)).slice(-1)[0]
+    if (optItem && !refVoted) {
+      out.push({ ref, kind: 'options', who: optItem.by, ageDays,
+        sample: optItem.text.replace(/\s+/g, ' ').slice(0, 120) })
+      continue
+    }
+    // 触发 ③：撤回/更正（存在过摇摆 ⇒ 值得固化）
+    //   ⚠ 同 ① 用**开头**判据：只在叙述中顺带提到"更正条/以本条为准"的，不算摇摆。
+    const revItem = items.filter((i) => RE_REVERSAL.test(headOf(i.text))).slice(-1)[0]
+    if (revItem && !refVoted) {
+      out.push({ ref, kind: 'reversal', who: revItem.by, ageDays,
+        sample: revItem.text.replace(/\s+/g, ' ').slice(0, 120) })
+      continue
+    }
+    // ⚠ **故意不再按"≥2 角色发言"触发** —— 那正是被换掉的那条噪音源。
+    void roles
+  }
+  out.sort((a, b) => a.ageDays - b.ageDays)
+  return out
+}
+
 // ─────────────────────────────────────────────────────────── 观测（有界）
 
 /** 探针**每次 `apply()`** 最多写几行（额度是 `makeProbe()` 的闭包局部量，每次 `apply()` 各一份）—— 观测自己不许变成噪音 */
@@ -2165,6 +2632,32 @@ export function apply(ctx) {
         if (w.dir) {
           lines.push(`· .warden：已建（SPEC ${w.spec ? '✓' : '✗'} ｜ 轮次 ${showLines(w.rounds)} ｜ 发现 ${showLines(w.findings)}`
             + ` ｜ 角色发言 ${showLines(w.speech)} ｜ 脑子 ${showLines(w.brain)} 份）`)
+          // ★ 2026-09-30：待决选择检测（**取代**旧的分歧检测 —— 见 detectPendingDecisions 注释）
+          //   旧判据「≥2 角色发言」实测 21 个 ref 全中、13 个从没投过，且五个被点名的 ref
+          //   是 100% 纯事实（无选项可投）⇒ 已被证明是噪音源，且看不到"单人裁决"这个真盲区。
+          //   新判据找**可选项**（裁决 / 互斥方案 / 撤回），不找"谁说过话"。
+          const pendingDecisions = detectPendingDecisions(proj.root)
+          const KIND_CN = { verdict: '单方面裁决', options: '互斥方案', reversal: '撤回/更正' }
+          // ⚠ 噪音控制的口径（**第一版写错过，记下来**）：
+          //   我原来按 `ageDays < 0.5` 决定"逐条列还是折叠" —— 实测**全 4 条都是 ≥0.5 天**
+          //   ⇒ 只剩一行折叠计数，**人根本看不到内容**，等于没提示。
+          //   错在把"这条分歧多老"当成了"该不该给人看"。**该看的是"这条提过没有"**，
+          //   而"提过没有"这个状态我拿不到（状态行是无状态的纯函数）。
+          //   ⇒ 改成**永远逐条列前 5 条**（按年龄升序，新的在前），**只折叠第 6 条之后的尾巴**。
+          //     这样"最近有 4 条待决"永远看得见，而不会随条数增长把状态行撑爆。
+          const MAX_SHOW = 5
+          const shown = pendingDecisions.slice(0, MAX_SHOW)
+          const rest = pendingDecisions.slice(MAX_SHOW)
+          for (const d of shown) {
+            const age = d.ageDays < 1 ? Math.round(d.ageDays * 24) + ' 小时' : Math.round(d.ageDays) + ' 天'
+            lines.push(`· ⚠ **待决选择**（${KIND_CN[d.kind] || d.kind}${d.who ? ' · ' + d.who : ''}，已挂 ${age}）：`
+              + `${d.ref} —— ${d.sample}`
+              + `\n  → 该不该由角色定？\`node warden.mjs vote cast --topic ${d.ref} --role <角色> --choice <选项> --reason <理由>\``)
+          }
+          if (rest.length > 0) {
+            lines.push(`· ⓘ 另有 ${rest.length} 条待决（未列）：${rest.slice(0, 6).map((d) => d.ref).join(' / ')}${rest.length > 6 ? ' …' : ''}`
+              + ` ｜ 处置：投掉它，或标成不需投票`)
+          }
         } else {
           lines.push('· .warden：**还没建** —— 在工程根先跑 `init` 把用户原话逐字锁进去')
         }

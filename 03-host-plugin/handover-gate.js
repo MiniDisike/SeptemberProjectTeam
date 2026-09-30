@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 /**
  * R43 —— 「把写交接与读交接写进硬规则」的**执行器**（常驻 Host Cordis 插件）。
  *
@@ -75,6 +75,32 @@ const HANDOVER_PREFIX = '交接-'
 const HANDOVER_SUFFIX = '.md'
 
 /**
+ * ★ 2026-09-26（A2）：**归档/全文类**的 `交接-*.md` —— 它们是**交接文件**，但**不参与选举**。
+ *
+ * 用户逐字（2026-09-26）：「（用户原话已隐去 —— 公开版不留逐字）」
+ *
+ * 隐患（实测，就在本工程根）：工程根里那份 `交接-归档-第24轮起全文-2026-09-26.md`
+ *   有 **355 KB**。它 `isHandoverName() === true` ⇒ 万一 `交接.md`（首选名）被删掉，
+ *   `resolveHandover` 就会**挑中这份 355 KB 的全文归档**当作"这个会话必须读的那一份"
+ *   ⇒ 等于**一点上下文都没省**，比"没有交接"更糟（没有交接至少会 fail-closed 拦住人）。
+ *
+ * ⇒ 判据分两层，**必须分开说**（含糊一次就会把隐患原样埋回去）：
+ *   ① `isHandoverName` **仍然返回 true** —— 它**是**交接文件：能被 `read`、
+ *      写它**不被写闸拦**（工程根下 `交接*.md` 是两条闸的共同豁免项）。**不收窄这一层。**
+ *   ② 但它**不能进"最新交接"的选举池**，也**不能单独满足"这个工程有交接"**。
+ *      为什么②必须连"工程有交接"一起否掉：若只把它从排序里排除、却仍算"工程有交接"，
+ *      那么 `交接.md` 被删之后 `resolveHandover` 会**换一个名字**把它选中
+ *      （`!cands.length` 那条 `why:'none'` 的判据就不成立了）⇒ 隐患**原封不动**。
+ *      所以排除面覆盖 `listHandovers`（选举池 + "有没有"）与 `resolveHandover` 的两条路。
+ *
+ * 词表为什么是这两个词（`归档` / `全文`）：它们正是**长文备份**在中文里的标准写法，
+ *   本工程那份就叫 `交接-归档-第24轮起全文-2026-09-26.md`（两个词同时命中）。
+ *   **故意用子串而不是正则**：子串判定一眼可读、抄不错，且**不含任何"聪明"的启发式**
+ *   （"看着像长文"这种判据既不稳定也说不清）。代价如实写在 `isArchivedHandoverName` 里。
+ */
+const HANDOVER_ARCHIVE_WORDS = ['归档', '全文']
+
+/**
  * 本插件自己的版本串 —— **只出现在自动草稿的 `生成者:` 那一行**，不参与任何判定。
  * 为什么要有它：自动草稿是"机器写的"，读它的人必须能一眼看出**是哪个版本写的**
  * （草稿内容随版本变；`生成者: handover-gate@<版本>` 就是钉住这一点的）。
@@ -131,14 +157,17 @@ const PLUGIN_VERSION = '1.1.0-auto-draft'
  *     · 自动草稿的**目的**是"让任务自动化" ⇒ 它必须是一份**真交接文件**：
  *       能被下一轮的人 `read` 到、能被算成"这个工程有交接"、能被 `isHandoverName` 认出来。
  *     · 若起一个**不被 `isHandoverName` 认的**名字（如 `_auto-交接草稿.md`），
- *       它**不消写闸**（`onToolResult` 里"只有解析出来的那一份才算更新了交接"）⇒
+ *       它**进不了候选池**（`isHandoverName` 为假 ⇒ `listHandovers` 不列它）⇒ 它**消不了写闸**：
+ *       记账侧（`onToolResult`，改法 A 后）认的是「**被 `resolveHandover` 选中的那一份，
+ *       或候选池里（非归档）的任一份**」，而这个名字**哪一种都不是** ⇒
  *       草稿写完**欠账还在** ⇒ 用户还是被拒绝改文件 ⇒ 这个功能等于没做（**半成品**）。
  *     · 若起 `交接.md`（首选名）⇒ **抢占用户自己的首选名**，那是用户的文件，不行。
  *
  *   ⇒ 所以选了 `交接-<日期>.md` 这一族名。**后果（如实、一条不漏）**：
  *     ① `isHandoverName('交接-2026-09-24.md') === true` ⇒ 它**是**一份"交接文件"：
  *        工程根下写它**走两道闸的共同豁免**（`decideWrite` 第 2 步）、且**能消写闸欠账**
- *        （`onToolResult` 里 `pathKey(abs) === pathKey(resolvedPath)` 那一条）——
+ *        （`onToolResult` 里那条 `pathKey(abs) !== pathKey(resolvedPath)` 的早退分支 ——
+ *          只要 `abs` 在候选池里就**不会**早退；改法 A 之前它才是"只认选中那一份"）——
  *        这正是我们要的（草稿必须真的算数），但它也意味着
  *        **一份自动草稿能让"这个工程有交接"成立、从而解除 deny**。
  *     ② 它会**参与"最新那一份"的选举**（`compareLatestHandover`：日期优先）。
@@ -202,7 +231,7 @@ const PRESENT_TOOLS = Object.freeze(['present'])
  * ⚠ 仍然**拦不住** `node script.mjs`（脚本内部写盘）、`python -c "open(...).write()"`、
  *   以及任何拼出来的路径 —— 这时它**不会被记成脏**（如实标注，不许说成"防住了 shell"）。
  */
-const WRITE_HINTS = /(Set-Content|Add-Content|Out-File|Set-ItemProperty|Remove-Item|Move-Item|Copy-Item|New-Item|Clear-Content|Rename-Item|tee\b|sed\s+-i|truncate|dd\s|>\s*[^&\s])/i
+const WRITE_HINTS = /(Set-Content|Add-Content|Out-File|Set-ItemProperty|Remove-Item|Move-Item|Copy-Item|New-Item|Clear-Content|Rename-Item|tee\b|sed\s+-i|truncate|\bdd\s+if=|>\s*[^&\s])/i
 
 /**
  * ★★ 三条硬规矩 —— **逐条逐字**，**全部从权威源机器抽取**。
@@ -272,6 +301,32 @@ function isHandoverName(n) {
 }
 
 /**
+ * ★ 2026-09-26（A2）：它是不是**归档/全文**那一类交接件（`交接-…归档….md` / `交接-…全文….md`）。
+ *
+ * 语义**只有一条**：**不参与"最新交接"的选举，也不算"这个工程有交接"**。
+ *   ⚠ 它**不影响** `isHandoverName` —— 归档件照样**是**交接文件（能读、写得进去）。
+ *   判据与理由的全文在文件头的 `HANDOVER_ARCHIVE_WORDS` 那一节，**改之前先读那一节**。
+ *
+ * ⚠ 代价如实（不许把它说成"防住了"）：
+ *   · 这是**名字启发式**。把归档件起名成 `交接-2026-09-25.md`（不带"归档/全文"字样）
+ *     ⇒ 本函数**认不出来**，它照样会进选举池。这是**拦不住**的那一类，不是"防住了"。
+ *   · 反方向也如实：一份**真交接**若名字里带"归档/全文"（如 `交接-全文-2026-01-01.md`）
+ *     ⇒ 会被本函数排除 ⇒ 它得**改名**或被 `交接.md` 覆盖才能再被闸选中。
+ *     取舍：宁可让这个方向的误伤**看得见**（闸会报"没有交接"+ 给出该建的那条路径），
+ *     也不让 355 KB 的归档被静默读进上下文 —— 后者才是用户吃的那个亏。
+ *   · `交接.md`（首选名）**永远不适用**本函数：它是**指针**、用户点名的**总账**。
+ *     实测风险：把指针也排除掉就等于把"总账"从选举里删掉 ⇒ 首选名短路会失效。
+ *     所以调用点都先判 `HANDOVER_BASE` 再看本函数。
+ */
+function isArchivedHandoverName(n) {
+  const s = String(n || '')
+  if (s === HANDOVER_BASE) return false          // 首选名 = 总账，永远不排除
+  if (!isHandoverName(s)) return false
+  for (const w of HANDOVER_ARCHIVE_WORDS) if (s.indexOf(w) >= 0) return true
+  return false
+}
+
+/**
  * 从 `交接-YYYY-M-D.md` 里取出可比较的日期键（**补零后**，字典序 = 时间序）；取不到返回 ''。
  * ★ R43 返工（S10）：**月/日不补零也认**（`交接-2026-9-24.md`）。
  *   旧稿只认 `\d{2}`，于是 `交接-2026-9-24.md` 不被认成日期 ⇒ **静默退回 mtime**。
@@ -280,7 +335,16 @@ function isHandoverName(n) {
  *   等于把口径偷偷退回 mtime。非法月/日（0 或 13+）仍返回 ''（不许拿垃圾名字赢过真日期）。
  */
 function dateOfHandoverName(n) {
-  const m = /^交接-(\d{4})-(\d{1,2})-(\d{1,2})\.md$/.exec(String(n || ''))
+  /* ★ 2026-09-26 放宽（用户裁定"修"）：允许 `交接-` 与日期之间夹一个**轮号段**，形如
+   *   `交接-第57轮-2026-09-26.md`。为什么必须支持：按轮分档的命名（用户逐字要「交接XX轮」）
+   *   实际写成 `交接-第<N>轮-YYYY-MM-DD.md`，而旧正则要求 `交接-` 后**紧跟**年份 ⇒ 实测
+   *   `date=''`（`交接-第59轮-2026-09-26.md` 与 `交接-59-2026-09-26.md` 都一样）。
+   *   平时无害（`交接.md` 在时走首选名短路、根本不排序），但**哪天 `交接.md` 丢了**，
+   *   一个工程里那些按轮文件会**全部 `date=''` ⇒ 退到 mtime** ⇒ 挑出的"最新一份"可能是错的
+   *   （这正是本文件 L283-285 批评过的"把口径偷偷退回 mtime"）。
+   * ⚠ **只放宽、不收紧**：`交接-2026-09-24.md` 这类旧名**仍然被认**（可选段 `(?:第\d+轮-)?`）。
+   * 中间只允许 `第<数字>轮-`，不许任何别的字 —— 免得把垃圾名字放进来赢过真日期。 */
+  const m = /^交接-(?:第\d+轮-)?(\d{4})-(\d{1,2})-(\d{1,2})\.md$/.exec(String(n || ''))
   if (!m) return ''
   const mo = Number(m[2])
   const dy = Number(m[3])
@@ -356,6 +420,14 @@ function listHandovers(root, deps) {
   for (const n of names) {
     if (n === HANDOVER_BASE) continue
     if (!isHandoverName(n)) continue
+    /**
+     * ★ 2026-09-26（A2）：**归档/全文件不进这个池子**。
+     *   为什么要写在这里而不是"排序时跳过"：本函数返回的就是**选举池本身**
+     *   （`resolveHandover` 拿它当候选、`!cands.length` 还兼作"这个工程有没有交接"的判据）。
+     *   只在排序里跳过 ⇒ `cands.length` 仍 ≥1 ⇒ 归档件**照样能单独满足"工程有交接"**
+     *   ⇒ 删了 `交接.md` 之后闸会换个名字把它挑中，**隐患原封不动**（详见文件头的 A2 一节）。
+     */
+    if (isArchivedHandoverName(n)) continue
     const p = path.join(root, n)
     let st = null
     try { st = fs.statSync(p) } catch (e) { continue }
@@ -385,6 +457,48 @@ function compareLatestHandover(a, b) {
 }
 
 /**
+ * ★ 2026-09-26：交接文件的**新鲜度提示**（6 小时）。
+ *
+ * 用途**只有一个**：在 `resolveHandover` 的 `how` 里加一句提示，让**新窗口**知道
+ * "这份交接可能是上一轮留下的、不是当前轮的"。这是**提示**，不是**判定** ——
+ * 新窗口仍然可以读这份交接（fail-open 方向），只是读之前会看到一句警告。
+ *
+ * ⚠ 这与"欠账清不清不用时间过期"的原则**不冲突**：
+ *   · 那条原则说的是 `debtFor` —— "债主还活着吗"不能用时间猜（会造假放行）；
+ *   · 这里说的是 `resolveHandover` —— "这份交接是不是当前的"给个**提示**，
+ *     不影响任何 deny/allow 判定，只改 `how` 里显示的文字。
+ */
+const STALE_HINT_MS = 6 * 3600 * 1000
+
+/**
+ * ★ 2026-09-26：算出一份交接文件的**新鲜度提示**。
+ *
+ * 返回 `{ageMs, possiblyStale, hint}`：
+ *   · `ageMs`：文件年龄（毫秒），算不出返回 -1；
+ *   · `possiblyStale`：`ageMs > STALE_HINT_MS` 时为 true；
+ *   · `hint`：要拼进 `how` 的提示文字（非空时已含前导空格），新鲜时为 ''。
+ *
+ * ⚠ **只拼字符串，不做判定** —— 调用方拿 `hint` 拼进 `how`，拿 `possiblyStale` 做标记，
+ *   但**两者都不影响 deny/allow**。新窗口读到提示后怎么处理是**新窗口的事**，
+ *   本插件不替它决定"旧交接该不该读"。
+ */
+function staleHintOf(mtimeMs) {
+  try {
+    if (!mtimeMs || mtimeMs <= 0) return { ageMs: -1, possiblyStale: false, hint: '' }
+    const ageMs = Date.now() - mtimeMs
+    if (ageMs <= STALE_HINT_MS) return { ageMs: ageMs, possiblyStale: false, hint: '' }
+    const hours = Math.round(ageMs / 3600000)
+    return {
+      ageMs: ageMs,
+      possiblyStale: true,
+      hint: '（⚠ 这份交接约 ' + hours + ' 小时前的，可能不是当前轮的 —— 读它之前先确认它是不是你要接的那一轮）',
+    }
+  } catch (e) {
+    return { ageMs: -1, possiblyStale: false, hint: '' }
+  }
+}
+
+/**
  * 解析出"这个会话必须读/必须更新的那一份交接文件"。
  * 返回：`{ok:true, path, how, picked, candidates}` 或
  *       `{ok:false, why:'none', root, expect, candidates:[]}`
@@ -400,7 +514,8 @@ function resolveHandover(root, deps) {
   let prefOk = false
   try { prefOk = fs.existsSync(preferred) && fs.statSync(preferred).isFile() } catch (e) { prefOk = false }
   if (prefOk) {
-    return { ok: true, path: preferred, how: '首选名 `交接.md`', picked: HANDOVER_BASE, candidates: [HANDOVER_BASE] }
+    const sh = staleHintOf(statMtimeMs(fs, preferred))
+    return { ok: true, path: preferred, how: '首选名 `交接.md`' + sh.hint, picked: HANDOVER_BASE, candidates: [HANDOVER_BASE], ageMs: sh.ageMs, possiblyStale: sh.possiblyStale }
   }
   const cands = listHandovers(root, deps)
   const names = cands.map((c) => c.name)
@@ -411,14 +526,17 @@ function resolveHandover(root, deps) {
   const pool = (dated.length ? dated : cands).slice()
   pool.sort(compareLatestHandover)
   const pick = pool[0]
+  const sh = staleHintOf(pick.mtime)
   return {
     ok: true,
     path: pick.path,
-    how: dated.length
+    how: (dated.length
       ? '`交接-<日期>.md` 里**日期最新**的一份（日期优先于 mtime）'
-      : '`交接-*.md` 里 **mtime 最新**的一份（名字里没有可解析的 ISO 日期）',
+      : '`交接-*.md` 里 **mtime 最新**的一份（名字里没有可解析的 ISO 日期）') + sh.hint,
     picked: pick.name,
     candidates: names,
+    ageMs: sh.ageMs,
+    possiblyStale: sh.possiblyStale,
   }
 }
 
@@ -570,6 +688,41 @@ function createState() {
      *   ⇒ 写闸可被最常用的工作方式整条绕过。
      */
     pending: new Map(),
+    /**
+     * ★ 2026-09-26（A1）：键 = **工程根的 pathKey**，值 = `writeHandoverSkeleton()` 的结论
+     *   （`{wrote, why?, path?, bytes?}`）。
+     *   用途**只有一个**：同一进程里对**同一个工程根**只真写一次骨架 —— 工程根在只读盘上时，
+     *   不然每次改盘调用都会重试一次失败的写、并重复记一行失败（详见 `ensureHandoverSkeleton`）。
+     *   ⚠ 它是**结论缓存**，不是"已经建好了"的断言：`wrote:false` 也会被缓存下来，
+     *     调用方拿到的理由与第一次**逐字相同**（不许第二次悄悄变成"成功"）。
+     *   ⚠ 只活在内存里（随插件卸载清掉）：进程重启后重探一次，是**故意**的 ——
+     *     盘可能从只读变成了可写（把 U 盘插上、权限改回来），那时应该再试。
+     */
+    skeletonTried: new Map(),
+    /**
+     * ★ 「孤儿欠账」的修法（本单新增）：**本插件自己**记下的"**已经结束**的 sid"集合。
+     *
+     * 为什么要有它：`pending` 是**按工程根**记的、**跨会话可见** —— 建立它的那个会话一旦结束，
+     * 就**没有任何人会来清它**（清账只有三条路：写交接 `:1464` / `:1813`、插件卸载 `:2171`），
+     * 而 `debtFor()` 只看到"这个根有欠账" ⇒ **后续每一个窗口都被拦**，连 `pwsh` 与 `read`
+     * 这种只读动作都拒。实测账（`.warden/HANDOVER-GATE.jsonl`）：deny 99 / cleared 33，
+     * 同一 sid 的 deny→cleared 间隔 11 秒 ~ 1584 秒。
+     *
+     * 判据是**生命周期事件**（不是时间、不是"猜"）：宿主自己就这么用 ——
+     * `dsh-agent-loop\lib\index.js:1607-1610` 逐字
+     *   `ownerCtx.on("agent/disposed", …)` / `ownerCtx.on("session/disposed", …)`。
+     * 事件发布方与 payload 形状（读源码核过，不是猜的）：
+     *   · `dsh-agent\lib\index.js:513-518` `emitDisposed()` ⇒ `{ agent: entry.agent }`
+     *   · `dsh-session\lib\index.js:1500-1507` `emitDisposed()` ⇒ `entry.session`（**不是** `{session}`）
+     * 两条都在"**这个会话真的没了**"那一刻发 ⇒ 用它比"按时间过期"**不猜**：
+     * 时间过期是在赌"这么久应该干完了"，那会**造假放行**（方向员明确反对）。
+     *
+     * ⚠ **降级（硬要求）**：拿不到事件时行为**与今天完全一致**（照旧拦）。
+     *   本集合是**唯一的**放行依据，而且只装"**真的收到过 disposed**"的 sid ⇒
+     *   没收到 ⇒ 集合空 ⇒ `debtFor()` 的这条分支不成立 ⇒ **一个字都没变**。
+     *   **绝不用"判不了"当放行理由。**
+     */
+    disposedSids: new Map(),
     /** sid -> 本会话已经 steer 过几次（防环，落内存） */
     steers: new Map(),
     /** sid:turn -> 这一回合已经 steer 过几次 */
@@ -761,8 +914,20 @@ function finalizeUpTo(state, sid, upTo, deps) {
       if (slot.root) {
         const prev = state.pending.get(rootKey)
         const merged = (prev && Array.isArray(prev.paths)) ? Array.from(new Set(prev.paths.concat(paths))) : paths
+        /**
+         * ★ 本单（孤儿欠账）：`sid` **此前就已经记在这里了**（它一直是这一笔账的字段之一），
+         *   但**没有任何代码读它** —— 于是"这笔账是谁欠的"在判定时等于不存在，
+         *   会话一结束就成了**没人能清的孤儿**。
+         *   现在把它**显式写清 + 显式保留第一次欠账的那个人**（`ownerSid`）：
+         *   · `sid` 保持原义（**最后一次**把账记厚的那个会话）—— **既有字段含义一字不改**；
+         *   · `ownerSid` 是**新增**字段（第一次建立这笔账的会话），
+         *     判定时以它为准：**债主是谁，就等谁死**（否则一个晚到的子代理会把账"续命"）。
+         *   ⚠ `sid` 原来就存在 ⇒ 本处**不是**"新增了 sid"，是**固定住语义并加一个 ownerSid**。
+         */
         state.pending.set(rootKey, {
-          paths: merged, turn: b.turn, root: slot.root, sid: sid, at: new Date().toISOString(),
+          paths: merged, turn: b.turn, root: slot.root, sid: sid,
+          ownerSid: (prev && prev.ownerSid) ? prev.ownerSid : sid,
+          at: new Date().toISOString(),
         })
       }
       rows.push({
@@ -784,6 +949,43 @@ function publishTurnRows(state, rows, steered, why, deps) {
 }
 
 /**
+ * ★ 本单（孤儿欠账）新增：这笔 `pending` 的**债主**（欠账建立者）是谁。
+ * 优先 `ownerSid`（第一次建立这笔账的会话），退化到 `sid`（最后一次记厚的会话）。
+ * 为什么优先 ownerSid：账是**债主**欠的 —— 若一个晚到的子代理每次收尾都把 `sid` 刷新一遍，
+ * 按 `sid` 判就会让这笔账跟着**新的**会话一直"续命"，孤儿照样清不掉。
+ */
+function ownerOfPending(pend) {
+  try {
+    if (pend && typeof pend.ownerSid === 'string' && pend.ownerSid) return pend.ownerSid
+    if (pend && typeof pend.sid === 'string' && pend.sid) return pend.sid
+  } catch (e) { /* 读不到 ⇒ 认不出债主 */ }
+  return ''
+}
+
+/**
+ * ★ 本单（孤儿欠账）新增：这笔账的债主**是不是已经结束了**。
+ *
+ * ★★ **降级方向是"照旧拦"，这是硬要求**（任务书第 4 条）：
+ *   只有**真的收到过**那个 sid 的 `agent/disposed` / `session/disposed` 才返回 true。
+ *    - 事件拿不到 / 从来没收到 / 债主认不出来 ⇒ **false** ⇒ `debtFor()` 原样返回这笔账 ⇒ **拦**。
+ *    - `disposedSids` 里没有这个 sid ⇒ 同上。
+ *   **绝不允许**"判不了 ⇒ 放行"。`anonymous` 尤其不许当成"结束了"：
+ *   那是一个**兜底的假 sid**（`sessionOf()` 读不到时给的值），它不是会话、也可能还活着。
+ *
+ * ⚠ 为什么不用"按时间过期"：那是在**猜**"这么久应该干完了"，会把**还活着**的会话的账放掉
+ *   = **造假放行**（方向员明确反对）。生命周期事件不猜：它就在"会话真的没了"那一刻发。
+ */
+function isOwnerDisposed(state, pend) {
+  try {
+    const owner = ownerOfPending(pend)
+    if (!owner || owner === 'anonymous') return false
+    return !!(state && state.disposedSids && state.disposedSids.has(owner))
+  } catch (e) {
+    return false   // 读不出来 ⇒ 按"没结束"处理 ⇒ 照旧拦（fail-closed，不是 fail-open）
+  }
+}
+
+/**
  * 这个工程根**现在**有没有"改了文件却没更新交接"的欠账。两条来源：
  *   ① `state.pending`（**按工程根**）—— 收尾时建立；**跨会话可见**
  *      ⇒ 子代理改盘，父会话的下一次改盘动作也会被拦（S1）。
@@ -793,10 +995,22 @@ function publishTurnRows(state, rows, steered, why, deps) {
  *   是常态），按根跨会话比大小会误拦正在干活的另一个会话。跨会话那一条由 ①（root 键）负责。
  * ⚠ 残余缺口（如实申报）：子代理的回合**被 reject/abort** 时 ① 不会被建立，
  *   这时只有那个子代理自己的下一次改盘被 ② 拦住 —— 父会话看不见。见 DESIGN 第 11 节。
+ *
+ * ★★ 本单（孤儿欠账）改的就是 ① 这一条，而且**只改这一条**：
+ *   `pending` 是按工程根记的 ⇒ 建立它的会话结束后**没人能清**（清账只有三条路：
+ *   写交接 `:1464`/`:1813`、卸载 `:2171`）⇒ 后续每个窗口全被拦，连只读的 `pwsh`/`read` 都拒。
+ *   现在：**债主已经结束 ⇒ 这笔账不算数**（`debtFor` 当它不存在）。
+ *
+ *   ⚠ 这里**不是**在放宽判据，而是**把判据钉回它本来的意思**：
+ *   写闸要拦的是"**改了盘、又还没写交接**"，那是一个**活的**动作；
+ *   债主都没了 ⇒ 没有"下一轮"来补这条交接了 ⇒ 继续拦**拦不出任何补救**，只产出 deny 噪声。
+ *   `state.cur`（②，本会话自己的脏桶）**完全不受影响** —— 活着的会话照旧被 S2 拦。
+ *
+ *   ⚠ **降级**：拿不到事件 ⇒ `isOwnerDisposed()` 恒 false ⇒ **与今天逐字一致**（照旧拦）。
  */
 function debtFor(state, rootKey, sid, turn) {
   const pend = state.pending.get(rootKey)
-  if (pend && Array.isArray(pend.paths) && pend.paths.length) return pend
+  if (pend && Array.isArray(pend.paths) && pend.paths.length && !isOwnerDisposed(state, pend)) return pend
   const paths = []
   let fromTurn = 0
   for (const b of state.cur.values()) {
@@ -916,7 +1130,192 @@ function emptyHandoverReason(o) {
   return lines.join('\n')
 }
 
+/**
+ * ★★ 2026-09-26（A1）：**没有交接时自动创建一份最小骨架** —— 骨架正文的唯一生成函数。
+ *
+ * 用户逐字（2026-09-26）：「（用户原话已隐去 —— 公开版不留逐字）」
+ *
+ * ⇒ 用户要的是「**别炸**」：工程根一份交接都没有时，闸现在**只报错、不自动建**，
+ *   于是每个新工程的第一句话都是"你去用 write 建一份" —— 这一步机器自己就能做。
+ *
+ * ⚠⚠ **本函数只拼字符串，绝不写盘**（写盘在 `writeHandoverSkeleton` 里，只有那一处）。
+ *   为什么拆开：拼串是**纯的** ⇒ 自检能直接断言"骨架里有哪三样"，
+ *   而"写没写、写失败怎么办"另有其函数、另有其负控。
+ *
+ * 内容**至少三样**（用户原话要的，逐条对上）：
+ *   ① **现在做到哪**   ② **下一步做什么**   ③ **这一轮动过哪些文件**（留「（待填）」）
+ * 外加一句**醒目的读法与警告**（照本工程那份指针的口气）—— 它必须含 **A2 那一句**：
+ *   删了 `交接.md` ⇒ 闸会退而读同目录里那份全文归档（可能几百 KB）⇒ **比现在更糟**。
+ *   ⚠ 这句不是装饰：A2 把归档件逐出选举之后，"退而读归档"这条路已经**被堵上了**
+ *     （闸会改成 fail-closed）。但**警告仍然要写**，而且**要写得更准**：
+ *     它现在说的是"会发生什么"，所以它必须说**现在真的会发生的事**（fail-closed + 该建哪条路径），
+ *     而不是复述一个已经被修掉的旧隐患 —— 复述旧行为就是**编**。措辞见下面 "⚠ 别删本文件" 那一段。
+ */
+function buildHandoverSkeleton(o) {
+  const src = (o && typeof o === 'object') ? o : {}
+  const L = []
+  L.push('# 交接 · ' + String(src.projectName || '（未命名工程）'))
+  L.push('')
+  L.push('> 工程根 `' + String(src.root || '') + '` ｜ 本文件是 **R43 硬闸要求的**那一份（闸的**首选名**）。')
+  L.push('> 它由 `handover-gate` 插件在**发现工程根下没有任何交接文件**时**自动创建**，')
+  L.push('> 内容是一份**最小骨架**（三样：现在做到哪 / 下一步做什么 / 这一轮动过哪些文件），**请你补上真内容**。')
+  L.push('')
+  L.push('## ⚠ 别删本文件')
+  L.push('')
+  L.push('> **删了会怎样（如实，别想当然）**：闸的**首选名**就是本文件。本文件一没，闸不会去读同目录')
+  L.push('> 那份 `交接-…归档…全文….md`（那可能**几百 KB**，读它等于一点上下文都没省）——')
+  L.push('> 归档件**已被排除在选举之外**（`isArchivedHandoverName`），所以闸会改成**拒绝 + 报错**，')
+  L.push('> 直到再建一份 `' + HANDOVER_BASE + '`（或者一份**不带**「归档」「全文」字样的 `交接-<日期>.md`）。')
+  L.push('> ⇒ 一句话：**删了就是把"省上下文"换成"每次都被拦住"**，没有任何好处。')
+  L.push('')
+  L.push('## 读法')
+  L.push('')
+  L.push('> 闸的规定：工程根下没有 `' + HANDOVER_BASE + '` / `' + HANDOVER_PREFIX + '*' + HANDOVER_SUFFIX + '` 时，')
+  L.push('> 一切 shell 与写文件调用被 **fail-closed 拒绝**；且必须先有**一次成功的 `read`** 命中本文件，才能改别的文件。')
+  L.push('> 过程留痕可以按轮/按天分文件（`' + HANDOVER_PREFIX + '…' + HANDOVER_SUFFIX + '`），**要看哪一轮只读那一份**，别通读全部。')
+  L.push('')
+  L.push('## 1. 现在做到哪')
+  L.push('')
+  L.push('（待填）')
+  L.push('')
+  L.push('## 2. 下一步做什么')
+  L.push('')
+  L.push('（待填）')
+  L.push('')
+  L.push('## 3. 这一轮动过哪些文件')
+  L.push('')
+  L.push('（待填）')
+  L.push('')
+  L.push('---')
+  L.push('')
+  L.push('（本文件由 `handover-gate@' + PLUGIN_VERSION + '` **自动创建**于 ' + String(src.at || '') + '；')
+  L.push('  它**只是一份骨架** —— 上面三节里的「（待填）」要由人来补，闸不会替你写内容。）')
+  return L.join('\n') + '\n'
+}
+
+/**
+ * ★★ 2026-09-26（A1）：**自动创建骨架的唯一写盘点**。
+ *
+ * 返回 `{wrote, why?, path?, bytes?}`；**绝不抛**（外面还包了一层 try/catch）。
+ *
+ * 安全阀（**顺序就是下面 if 的顺序**，一条都不跳）：
+ *   0. `!root`                        ⇒ `no-root`      （推不出工程根 ⇒ 不写：没有落点）
+ *   1. `fs.existsSync(target)`        ⇒ `exists`       ★ **绝不覆盖别人的文件**。
+ *        为什么这一条必须**最先**做（比"有没有 `.git`"还先）：本函数的存在理由就是
+ *        "一份都没有"；只要盘上**已经有**那一份，本函数就**没有任何**该做的事。
+ *        实测这条负控是会真跑的（第 3 条验证：有 `交接.md` 的工程根行为必须与今天一致）。
+ *   2. `<root>/.git` 不存在           ⇒ `no-git`       ★ **只在"工程根"上建**。
+ *        判据用 `.git`（**与 `findProjectRootVia` 完全同一个判据**），不另发明第二个口径。
+ *        为什么必须卡这一条：`%TEMP%` 那种临时目录、以及父代理 add-hoc 造的假根，
+ *        若被顺手建一份 `交接.md`，就是**把闸的账本撒到别人的目录里** —— 那是事故。
+ *        （本工程对"祖先 `.warden`"那条静默路已经栽过一次，见全局约定 §5。）
+ *   3. 拼串（`buildHandoverSkeleton`）抛了 / 正文为空 ⇒ `empty` ⇒ 不写
+ *   4. 写盘（`writeFileSync`，utf8）
+ *        · 抛了（只读盘 / 权限）⇒ `{wrote:false, why:'write-failed:…'}` ⇒ **调用方照旧 deny**
+ *          —— 这一条就是用户要的"**不许因为我建不了就放行**"。
+ *
+ * ⚠ 写盘用的是 **`fs.writeFileSync` 默认模式**（与自动草稿那条路**同一个口径**，一个字节都不改）。
+ *   为什么不加 `flag:'wx'`（防并发竞态）：env 里已经有 `WARDEN_HANDOVER_AUTO=on` 的
+ *   "先付款后放行"自动草稿在跑，两条路**都会**写 `<root>/交接-<日期>.md` ——
+ *   给骨架独加 `wx` 会让它们在竞态里**一条成功一条拿到 `EEXIST`**（凭空多一个失败面）。
+ *   这里选的是**与既有代码同一个口径**（晚到的覆盖早到的，两份内容都是机器可再生的骨架）。
+ */
+function writeHandoverSkeleton(o, state, deps) {
+  const src = (o && typeof o === 'object') ? o : {}
+  try {
+    const root = String(src.root || '')
+    if (!root) return { wrote: false, why: 'no-root' }
+    const { fs, path } = io0(deps)
+    const target = path.join(root, HANDOVER_BASE)
+
+    // 1) ★ 绝不覆盖：盘上已经有首选名那一份 ⇒ 本函数无话可说
+    let exists = false
+    try { exists = fs.existsSync(target) } catch (e) { exists = true }   // 探不了 ⇒ 当"有"（fail-closed 方向）
+    if (exists) return { wrote: false, why: 'exists', path: target }
+
+    // 2) ★ 只在**真工程根**（有 `.git`）上建
+    let hasGit = false
+    try { hasGit = fs.existsSync(path.join(root, '.git')) } catch (e) { hasGit = false }
+    if (!hasGit) return { wrote: false, why: 'no-git', path: target }
+
+    // 3) 拼串
+    let text = ''
+    try {
+      text = buildHandoverSkeleton({
+        root: root,
+        projectName: (() => { try { return path.basename(root) } catch (e) { return '' } })(),
+        at: new Date().toISOString(),
+      })
+    } catch (e) { text = '' }
+    if (!String(text)) return { wrote: false, why: 'empty', path: target }
+
+    const bytes = utf8ByteLength(text)
+
+    // 4) 写。抛了 ⇒ 如实报 why，调用方照旧 deny
+    try {
+      fs.writeFileSync(target, text, 'utf8')
+    } catch (e) {
+      return { wrote: false, why: 'write-failed:' + String((e && e.message) || e).slice(0, 120), path: target, bytes: bytes }
+    }
+    return { wrote: true, path: target, bytes: bytes }
+  } catch (e) {
+    return { wrote: false, why: 'threw:' + String((e && e.message) || e).slice(0, 120) }
+  }
+}
+
+/**
+ * ★★ 2026-09-26（A1）：**把"自动建骨架"接进判定的唯一入口**。
+ *
+ * 它就是 `writeHandoverSkeleton` 外面那一层薄壳，多做两件事，别的什么都不做：
+ *   ① **每个工程根、每个进程只真写一次**（`state.skeletonTried`）。
+ *      为什么必须有这一层：闸挂在**每一次**改盘调用上。工程根若在只读盘上，
+ *      "写失败"会**每一次都重试一次**（每次一次 `existsSync` + 一次失败的 `writeFileSync`）
+ *      ⇒ 一个回合里几十次无谓的 syscall + 几十行同样的报错。第一次如实报，之后直接复用结论。
+ *      ⚠ 复用是**结论级**的（`wrote:false, why` 原样带上），不是"假装成功"。
+ *   ② **记账 + 建完就结束**：写成了 ⇒ 清掉这个工程根的**陈旧脏账** + 记 `skeleton-created` 行。
+ *      为什么连"清欠账"一起做（这一步**不改任何判定**，只改账本显示）：
+ *      骨架**是**一份合法交接（首选名），盘上从此**真的有了**。而 `state.pending` 里那条
+ *      欠账记的是"改过盘却没有那一份文件" —— 那句话在骨架落盘的那一刻就**不再成立**了。
+ *      留着它 ⇒ 用户按我们说的建完骨架、`read` 完，**第一句话就被写闸拦住**
+ *      （"上一轮改了 N 个文件却没更新交接"）⇒ 他合理地以为"自动创建是骗人的"。
+ *      ⚠ 口径与 `freshenAutoSettings` **完全一致**（同一个函数、同样的理由），
+ *        只清**本工程根**那一把键，别的工程的欠账一个都不动。
+ *      ⚠ 明确**不**做：不动 `readOk`、不动 `h`、不动返回值 ⇒ "自动建了骨架就放行"**不存在**。
+ *
+ * ⚠ **绝不抛**：任何一步出问题都退化成"这次没建成"（`{wrote:false}`）⇒ 调用方**照旧 deny**。
+ */
+function ensureHandoverSkeleton(pr, state, deps) {
+  try {
+    const root = pr && pr.root ? String(pr.root) : ''
+    if (!root) return { wrote: false, why: 'no-root' }
+    const rk = pathKey(root)
+    if (state.skeletonTried.has(rk)) return state.skeletonTried.get(rk)
+
+    const w = writeHandoverSkeleton({ root: root }, state, deps)
+    state.skeletonTried.set(rk, w)
+
+    if (w.wrote === true) {
+      freshenAutoSettings(state, root, 'handover-gate@skeleton', w.path, deps)
+      logRow(state, {
+        at: new Date().toISOString(), ev: 'skeleton-created', root: root, path: w.path, bytes: w.bytes,
+      }, deps)
+    } else if (w.why && w.why !== 'no-git' && w.why !== 'exists') {
+      /* 真的试过、真没成（只读盘 / 权限 / 拼串出错）⇒ **记一行失败**（不许静默）。
+         `no-git`/`exists` 不记：那是"没有该做的事"，不是故障（与 `logAutoDraft` 同口径）。 */
+      fail(state, 'skeleton-write-failed', {
+        root: root, path: w.path, why: w.why,
+        action: 'deny（fail-closed；"我建不了"**不会**变成放行）',
+      }, deps)
+    }
+    return w
+  } catch (e) {
+    return { wrote: false, why: 'threw:' + String((e && e.message) || e).slice(0, 120) }
+  }
+}
+
 function missingHandoverReason(o) {
+  const sk = o && o.skeleton
+  const ok = !!(sk && sk.wrote === true)
   const lines = [
     '[task-warden R43 读闸] 先别动文件：**这个工程里没有交接文件**。',
     '',
@@ -924,17 +1323,53 @@ function missingHandoverReason(o) {
     '    工程根：' + o.root + '（由 `' + o.via + '` 判定）',
     '    ① ' + HANDOVER_BASE + '（首选）',
     '    ② ' + HANDOVER_PREFIX + '*' + HANDOVER_SUFFIX + '（取最新的一份）',
+    '    ⚠ 名字里带「归档」「全文」的 `' + HANDOVER_PREFIX + '*' + HANDOVER_SUFFIX + '` **不算数** ——',
+    '       那些是长文备份（可能几百 KB），把它们当"这个工程有交接"就等于把上下文省下来的又读回去。',
     '',
     '  本闸对"交接文件不存在"的选择是 **fail-closed：拒绝 + 记一行失败**（不是放行）——',
     '  自检里把这条钉住了（`handover-missing`）。',
     '',
-    '  补法（逐字可抄）：用 `write` 建这一份，然后才能改别的文件：',
+  ]
+  /**
+   * ★ 2026-09-26（A1）：**先付款后放行**那一句，只在**真的写成了**的时候出现。
+   *   ⚠ 判据是 `sk.wrote === true` —— 不是"我试过了"。试了但写失败（只读盘）
+   *     必须走下面那段**一字不改**的原始文案，否则就会出现"报错说已经建好了、盘上其实没有"
+   *     这种**报假账**（用户后面照着做，找不到文件）。
+   */
+  if (ok) {
+    lines.push('  ★ 我已经替你**自动建好了骨架**（你刚才没有交接文件，这一步机器自己就能做）：')
+    lines.push('    ' + sk.path + '（' + sk.bytes + ' 字节）')
+    lines.push('  ⚠ **但这次调用仍然拒绝** —— "别炸"不等于"绕过闸"：骨架里三节还是「（待填）」，')
+    lines.push('     没有一个字是你写的 ⇒ 没有任何新信息值得放行。')
+    lines.push('  → **下一步（一步）**：先 `read` 那个文件（读闸认的就是"这一份读过"），')
+    lines.push('     再把「现在做到哪 / 下一步做什么 / 这一轮动过哪些文件」补上，然后继续。')
+    lines.push('')
+  } else if (sk && sk.why && sk.why !== 'no-git' && sk.why !== 'exists') {
+    /**
+     * 试了、没成 —— **必须说出来**（不许静默），并且**原样 deny**（这就是用户要的
+     * "不许因为'我建不了'就放行"）。`no-git` 不在这里出现：那只是"这不是个工程根"，
+     * 不是故障；往 `%TEMP%` 里报一句"我没能给你建"反而是噪声。
+     */
+    lines.push('  ⚠ 我试着自动建一份骨架给你，**没建成**：' + sk.why + '（目标 ' + (sk.path || '') + '）')
+    lines.push('     ⇒ 按原样 **fail-closed**：建不了就拒绝，**不会**因为"我建不了"就放行。')
+    lines.push('')
+  }
+  lines.push(
+    '  补法（两条路，**按你要写什么选**）：用 `write` 建这一份，然后才能改别的文件：',
     '    ' + o.expect,
     '  内容至少写清三样：**现在做到哪 / 下一步做什么 / 这一轮动过哪些文件**。',
-    '  （写这一份**不会被拦** —— 工程根下的 `交接*.md` 是两条闸的共同豁免项。）',
+    '',
+    '  ★ 两条路，按你要写的东西选（两条闸**都认**、写它们**都同样不被拦**）：',
+    '    1) **只更新进度**（"现在做到哪 / 下一步做什么"）⇒ 写 `交接.md`（闸的**首选名**）。',
+    '    2) **写本轮的过程留痕**（子轮报告 / 审查判决 / 返工记录）⇒',
+    '       写进 `交接-第<N>轮-<日期>.md`（**新建**，闸**也认**它、写它**同样不被拦**）。',
+    '',
+    '  ⚠ **别把过程留痕堆进 `交接.md`** —— 它是**闸每次都要读的那一份**，',
+    '    堆进去**等于把"省上下文"吃回去**（实测：一次拆分省到 78 行，被追加回 1340 行）。',
+    '  （两条路的共同点：工程根下的 `交接*.md` 是两条闸的共同豁免项。）',
     '',
     rulesBlock(),
-  ]
+  )
   return lines.join('\n')
 }
 
@@ -963,10 +1398,15 @@ function writeGateReason(o) {
     '  ⚠ 有欠账时 **shell 类一律拒**（连 `git status` 这种只读命令也拒）：',
     '     否则 `pwsh -Command "node -e \\"fs.writeFileSync(...)\\""` 这类**没有关键词**的写动作会绕过写闸。',
     '',
-    '  补法（一步）：用 `write`/`edit` 把这一轮"做了什么、下一步、动过哪些文件"写进上面那份交接。',
-    '  ⚠ 如果你**还没读过**这一份交接：先 `read` 它，再更新它 —— 否则你写的是没读过的东西。',
+    '  补法（两条路，**按你要写什么选**）：',
+    '    1) **只更新进度**（"现在做到哪 / 下一步做什么"）⇒ 写上面那份 `交接.md`（闸的**首选名**）。',
+    '    2) **写本轮的过程留痕**（子轮报告 / 审查判决 / 返工记录）⇒ 写进 `交接-第<N>轮-<日期>.md`',
+    '       （**新建**，闸**也认**它、写它**同样不被拦**）。',
+    '  ⚠ **别把过程留痕堆进 `交接.md`** —— 它是**闸每次都要读的那一份**，',
+    '    堆进去**等于把"省上下文"吃回去**（实测：一次拆分省到 78 行，被追加回 1340 行）。',
+    '  ⚠ 如果你**还没读过**这一份交接：先 `read` 它，再写它 —— 否则你写的是没读过的东西。',
     '  写它**不会被拦**（工程根下的 `交接*.md` 是两条闸的共同豁免项）—— 但要**认那一份**：',
-    '  写无关的 `交接-别的名字.md` **不清**欠账，**0 字节写**会被直接拒。',
+    '  写**候选池里**的任一份（`交接.md` 或非归档的 `交接-*.md`）**都能**清欠账；**0 字节写**会被直接拒。',
     '',
     rulesBlock(),
   ]
@@ -1604,7 +2044,7 @@ function decideWrite(state, input, deps, opts) {
     if (!readOk) {
       const reason = h.ok
         ? shellReadGateReason({ handover: h.path, how: h.how, root: pr.root, via: pr.via, toolName: toolName, target: abs || raw })
-        : missingHandoverReason({ root: pr.root, via: pr.via, expect: h.expect })
+        : missingHandoverReason({ root: pr.root, via: pr.via, expect: h.expect, skeleton: ensureHandoverSkeleton(pr, state, deps) })
       state.stats.denied += 1
       pushRing(state.denies, { at: new Date().toISOString(), sid: sid, gate: 'read-gate-shell', tool: toolName, target: abs || raw, handover: h.ok ? h.path : '' })
       logRow(state, { at: new Date().toISOString(), ev: 'deny', gate: 'read-gate-shell', sid: sid, tool: toolName, target: abs || raw }, deps)
@@ -1621,6 +2061,32 @@ function decideWrite(state, input, deps, opts) {
       why: '按 `交接.md` 与 `交接-*.md` 两个名字在工程根下都没找到交接文件',
       action: 'deny（fail-closed；自检把这条钉住了）',
     }, deps)
+
+    /**
+     * ★★ 6.a 自动建**最小骨架**（2026-09-26，A1）—— "**别炸**"，**不是**"绕过闸"
+     * ------------------------------------------------------------------
+     * 用户逐字：「（用户原话已隐去 —— 公开版不留逐字）」
+     *
+     * 三件事**必须分开**，混起来就会出事故：
+     *   ① **建**（`ensureHandoverSkeleton`）：工程根真的有 `.git`、且首选名那一份**不存在**
+     *      ⇒ 写一份 `交接.md` 骨架（三样 + 读法 + "别删本文件"警告）。写失败 ⇒ **只报错，不放行**。
+     *   ② **建了也照旧 deny**：这一段的 `fail(...)` 在上面、`deny(...)` 在下面 ——
+     *      骨架落盘**没有改动** `h` / `readOk` / 任何判据，返回值仍由**原判据**决定。
+     *      为什么这是对的（而不是"建了就该放行"）：用户要的是"**别炸**"；
+     *      骨架三节全是「（待填）」，放行等于把"闸认了一份空文件"变成新常态 ——
+     *      而那正是 6.b 已经**按安全阀明确关掉**的那条路（默认 off，且要求
+     *      "本轮有改动 + 声明有后续"）。A1 **绝不去开那扇门**。
+     *   ③ 但**受益是真的**：紧接着的报错里会多一行"我已建好 <路径>（N 字节），请补内容"，
+     *      且这个工程根那条**陈旧脏账**被清掉（`ensureHandoverSkeleton` 里做，
+     *      口径与 `freshenAutoSettings` 逐字一致）⇒ 用户 `read` 完就能写。
+     *      **"炸一次"变成"炸一次就够"** —— 这就是"别炸"的可验证含义。
+     *
+     * ⚠ shell 分支（第 5 步）走的是**同一个** `ensureHandoverSkeleton`（经 `missingHandoverReason`
+     *   的 `skeleton` 参数），所以"只读命令也拒"那条口径**没松**，只是报错内容更可用。
+     * ⚠ 顺序：骨架**先于** 6.b 的自动草稿。两条路都会碰 `交接.md`/`交接-<日期>.md` 这一族名字，
+     *   先建首选名 ⇒ 6.b 的"能不能认出这一份"问的是**同一次**盘上状态，不会打架。
+     */
+    const sk = ensureHandoverSkeleton(pr, state, deps)
 
     /**
      * ★★ 6.b 自动写交接草稿 —— **fail-closed 的"先付款后放行"**
@@ -1676,8 +2142,12 @@ function decideWrite(state, input, deps, opts) {
 
     state.stats.denied += 1
     pushRing(state.denies, { at: new Date().toISOString(), sid: sid, gate: 'read-gate-missing', tool: toolName, root: pr.root })
-    logRow(state, { at: new Date().toISOString(), ev: 'deny', gate: 'read-gate-missing', sid: sid, tool: toolName, root: pr.root, expect: h.expect }, deps)
-    return deny(missingHandoverReason({ root: pr.root, via: pr.via, expect: h.expect }))
+    logRow(state, {
+      at: new Date().toISOString(), ev: 'deny', gate: 'read-gate-missing', sid: sid, tool: toolName, root: pr.root, expect: h.expect,
+      /* ★ A1：这一行也记下"骨架建没建成" —— 否则事后查账只看到 deny，看不出机器已经尽力了 */
+      skeleton: sk && sk.wrote === true ? 'created' : String((sk && sk.why) || '-'),
+    }, deps)
+    return deny(missingHandoverReason({ root: pr.root, via: pr.via, expect: h.expect, skeleton: sk }))
   }
 
   // 7) 读闸：这一份交接**这个会话**成功读过吗
@@ -1749,6 +2219,18 @@ function onToolResult(state, exec, result, deps, opts) {
         let n = ''
         try { n = nodePath.basename(abs) } catch (e) { continue }
         if (!isHandoverName(n)) continue
+        /**
+         * ★ 2026-09-26（A2）第二处候选池过滤：**读归档件永远解不开读闸**。
+         *   为什么这里也必须过滤 —— 这是 A2 里最容易漏、且**漏了就等于没修**的一处：
+         *   `state.read` 只记"**这条路径**被读过"（上一行注释），而 `decideWrite` 的读闸
+         *   问的是 `readSet.has(pathKey(h.path))`，`h.path` **只可能**是选举选出来的那一份。
+         *   ⇒ 归档件本来也**永远不可能**成为 `h.path`；本行因此**不是**在收窄判定。
+         *   它真正的作用是**记账的语义**：若不过滤，`isResolved` 会恒为 `false`，
+         *   日志里就会出现一条"读了交接文件但没解开闸"的行 —— 读的人分不清
+         *   "这是归档件（本来就不算）" 还是 "闸坏了"。过滤掉 ⇒ 这条路径**根本不进**读账。
+         *   ⚠ 如实：读归档件**不报错、不拦人**（读它无害，还能读全文自查）；只是**不算数**。
+         */
+        if (isArchivedHandoverName(n)) continue
         const pr = findProjectRootVia(nodePath.dirname(abs), deps)
         if (!pr.root) continue
         const h = resolveHandover(pr.root, deps)
@@ -1789,13 +2271,36 @@ function onToolResult(state, exec, result, deps, opts) {
     const slot = rootSlot(b, rootKey, pr.root || '')
 
     if (abs && pr.root && isHandoverTarget(abs, pr.root, deps)) {
-      // ★ R43 返工（(4)）：**只有解析出来的那一份**才算"更新了交接"
+      // ★ R43 返工（(4)）：被 `resolveHandover` 选中的那一份、**或候选池里的任一份**，都算"更新了交接"
       const h = resolveHandover(pr.root, deps)
       const resolvedPath = h.ok ? h.path : h.expect
       if (pathKey(abs) !== pathKey(resolvedPath)) {
-        pushRing(state.turns, { at: new Date().toISOString(), sid: sid, turn: turn, ev: 'handover-other', path: abs, resolved: resolvedPath })
-        logRow(state, { at: new Date().toISOString(), ev: 'handover-other-not-updating', sid: sid, turn: turn, path: abs, resolved: resolvedPath }, deps)
-        return
+        /**
+         * ★ 2026-09-26 改法 A（R43 记账侧返工）：**从"只认被选举中的那一份"放宽到"在候选池里"**。
+         *
+         *   为什么放宽：`:1408-1410` 的文案说"写本轮的过程留痕 ⇒ 写 `交接-第<N>轮-<日期>.md`"、
+         *   `:2013` 的写侧也确实放行它 —— 但记账侧只认 `resolveHandover` 选中那一份
+         *   ⇒ 全账本实测 `handover-other-not-updating` 54 次 / `handover-updated` 0 次
+         *   ⇒ 按轮件是一台"只进不出"的欠账永动机（文案与账本对不上）。
+         *
+         *   ⚠ **不能用 `h.candidates` 判**：它是**裸名字**数组（`:522` 是 `['交接.md']`、
+         *     `:525`/`:541` 是 `names`），拿它跟绝对路径 `abs` 做 `pathKey` 比较**永远为假**
+         *     ⇒ 放宽不了、bug 原封不动。
+         *   ⇒ 必须用 `listHandovers(...).map(c => c.path)`：`.path` 是**绝对路径**（`:420`/`:441`），
+         *     且 `:434` 已经把**归档件**排除出池（负控 T3 靠的就是这一点）。
+         *
+         *   ★ 性能：本分支**只在** `pathKey(abs) !== pathKey(resolvedPath)` 为真时才算
+         *     ⇒ "命中首选名"的**常态路零额外 IO**；只有写"另一份"时才付
+         *     `listHandovers` 的 1 readdir + 每个候选一次 stat（实测 ~1.3 ms）。
+         *     **不要**把它提到 if 外面无条件调。
+         */
+        let pool = []
+        try { pool = listHandovers(pr.root, deps).map((c) => pathKey(c.path)) } catch (e) { pool = [] }
+        if (pool.indexOf(pathKey(abs)) < 0) {
+          pushRing(state.turns, { at: new Date().toISOString(), sid: sid, turn: turn, ev: 'handover-other', path: abs, resolved: resolvedPath })
+          logRow(state, { at: new Date().toISOString(), ev: 'handover-other-not-updating', sid: sid, turn: turn, path: abs, resolved: resolvedPath }, deps)
+          return
+        }
       }
       if (isEmptyHandoverWrite(toolName, args)) {
         // `decideWrite` 已经拒了；这里再兜一层（事件顺序不同 / 有人绕开 pre-execute 时）
@@ -1910,6 +2415,84 @@ function onTurnStopping(state, payload, deps, opts) {
   } catch (e) {
     // ★ 绝不许抛（抛了这回合会被标成 error）
     try { fail(state, 'turn-stopping-threw', { err: String((e && e.message) || e) }, deps) } catch (e2) { /* 算了 */ }
+  }
+}
+
+/* ==========================================================================
+ * ★ 本单（孤儿欠账）：**会话结束**时把这笔账"作废"的唯一事实来源
+ * ==========================================================================
+ *
+ * 两个事件、两种 payload 形状 —— **都是读源码核过的，不是猜的**：
+ *   · `agent/disposed`：`dsh-agent\lib\index.js:513-518` `emitDisposed()`
+ *       逐字 `const args = [entry.carrier, "agent/disposed", { agent: entry.agent }];`
+ *       ⇒ 监听器收到 **`{ agent }`**。
+ *   · `session/disposed`：`dsh-session\lib\index.js:1500-1511` `emitDisposed()`
+ *       逐字 `const callbackArgs = [entry.session];`
+ *       ⇒ 监听器收到的是 **`entry.session` 本身**（**不是** `{session}`）—— 形状不同，必须分开取。
+ *   ⚠ 这里如实说明：`session/disposed` 给的是 `session` 对象，而本插件认 sid 走的是
+ *     `sessionOf()` = `agent.session.header.id`。两者的取法**不一样**：
+ *     一个 session 对象自己就是 `header` 的宿主 ⇒ 取 `payload.header.id`；
+ *     也可能它本身就是那个 agent 形状 ⇒ 两条路都试一遍，取到就用。
+ *   宿主的用法（`dsh-agent-loop\lib\index.js:1607-1610`）确实就是这么两个 `ctx.on`。
+ *
+ * ★ 这个函数**绝不外抛**：dispose 链路上的异常会污染别人的拆卸流程。
+ */
+function sidOfDisposed(payload) {
+  try {
+    // 形状 A：`{ agent }`（agent/disposed）
+    const a = payload && payload.agent
+    if (a) { const s = sessionOf(a); if (s && s !== 'anonymous') return s }
+    // 形状 B：session 对象本身（session/disposed）—— `session.header.id`
+    const h = payload && payload.header
+    if (h && typeof h.id === 'string' && h.id) return h.id
+    // 形状 C：万一它包了一层
+    const s2 = sessionOf(payload)
+    if (s2 && s2 !== 'anonymous') return s2
+  } catch (e) { /* 认不出就记失败，见调用方 */ }
+  return ''
+}
+
+/**
+ * 收到"会话结束"⇒ 把那个 sid 记进 `disposedSids`（**唯一**的放行依据）。
+ *
+ * ⚠ **认不出 sid 时什么都不做**，并**记一行失败** `disposed-sid-unknown`（不许静默）：
+ *   认不出 ⇒ 集合里没有它 ⇒ `debtFor()` 照旧拦 ⇒ **方向是 fail-closed**，与今天一致。
+ *   这里**绝对不许**"认不出就当成某个 sid 结束了" —— 那会凭一个形状陌生的 payload 放行。
+ *
+ * ⚠ 记进集合时**不清 `pending`**：`pending` 的清账口径**一个字都不改**（仍只有那三条路）。
+ *   本集合只是一个"滤网"：账还在，但债主死了 ⇒ 判定时不算数。
+ *   为什么不清：清掉会**真的丢掉证据**（"谁欠过、欠了什么"以后查不到了）——
+ *   而本单第 5 条要求"谁欠的账"**记进日志、便于排查**，那就更不该删。
+ */
+function onDisposed(state, payload, evName, deps) {
+  try {
+    const sid = sidOfDisposed(payload)
+    if (!sid) {
+      // ⚠ `fail(state, ev, detail)` 里 `ev` 由**第 2 个实参**决定，`detail` 里的 `ev` 会被它覆盖
+      //   （`fail` 逐字 `Object.assign({at, ev: ev, kind:'failure'}, detail)` —— `ev` 在前）
+      //   ⇒ 原因写在 `why`/`cause` 里，**不要**再往 detail 里塞 `ev`（第一版塞了，被覆盖成 `agent/disposed`）。
+      try { fail(state, 'disposed-sid-unknown', { cause: evName, why: '收到 dispose 事件但认不出 sid ⇒ **不做任何放行**（照旧拦）' }, deps) } catch (e2) { /* 算了 */ }
+      return
+    }
+    const first = !state.disposedSids.has(sid)
+    state.disposedSids.set(sid, { at: new Date().toISOString(), ev: evName })
+    if (first) {
+      // ★ 第 5 条：把"谁欠的账"记进日志行 —— **新增字段**，既有字段含义一字不改。
+      //   把"这个 sid 一死，哪些工程根的账就不算数了"顺便点出来，便于以后排查孤儿欠账。
+      let releasedRoots = []
+      try {
+        for (const [rk, pend] of state.pending.entries()) {
+          if (ownerOfPending(pend) === sid) releasedRoots.push(rk)
+        }
+      } catch (e3) { /* 点不出来不影响记账 */ }
+      logRow(state, {
+        at: new Date().toISOString(), ev: 'pending-owner-disposed',
+        sid: sid, disposedEv: evName, ownerSid: sid,
+        alive: false, releasedRoots: releasedRoots, releasedCount: releasedRoots.length,
+      }, deps)
+    }
+  } catch (e) {
+    try { fail(state, 'disposed-threw', { ev: evName, err: String((e && e.message) || e) }, deps) } catch (e2) { /* 算了 */ }
   }
 }
 
@@ -2075,17 +2658,19 @@ function autoDry(opts) {
   return false
 }
 /**
- * 把**四条**监听挂到 ctx 上，返回 `state`（自检/诊断要读的东西都在里面）。
+ * 把**六条**监听挂到 ctx 上，返回 `state`（自检/诊断要读的东西都在里面）。
  *
  * ★ **对 `ctx` 的调用只有 `ctx.on`**（本函数里），`apply()` 里另加一次 `ctx.effect`。
  *   没有 `ctx.systemPrompt` / `ctx.context` / `ctx.provide` / `ctx.set` / 任何消息通道注册 ——
  *   自检里有一条把这份调用清单列出来逐条断言。
  *
- * ★ 四条监听各自被 `ctx.on` 注册成当前 fiber 的 effect（`cordis\lib\index.js:335-345`），
+ * ★ 六条监听各自被 `ctx.on` 注册成当前 fiber 的 effect（`cordis\lib\index.js:335-345`），
  *   fiber 卸载时**自动**摘掉；`state.disposers` 再兜一层，供 `ctx.effect` 与自检显式调用。
  *
  * ★ R43 返工新增第 ④ 条 `agent/pre-step`：**只为拿回合号**（S2 的修法要靠 `sid:turn` 分桶）。
  *   它是 waterfall ⇒ 必须 `return next()`，而且**绝不许抛**（抛了会把这一步打断）。
+ * ★ 本单新增第 ⑤⑥ 条 `agent/disposed` / `session/disposed`：**为判"债主还在不在"**
+ *   （孤儿欠账的修法）。详见那两条的注释块。
  */
 function install(ctx, options) {
   const opts = normalizeOpts(options)
@@ -2153,6 +2738,31 @@ function install(ctx, options) {
     return next()
   }))
 
+  /* ⑤⑥ ★ 本单（孤儿欠账）新增：**会话结束**的两条生命周期监听。
+   *
+   *   ★ 只用 `ctx.on`（**没有** `ctx.get()`、**没有**改 `inject`）—— 理由逐条：
+   *     · `inject: []` 是**故意留空**的：Cordis 的 inject 是**硬依赖**，声明了却缺席
+   *       ⇒ **整个插件进 `waiting`**（`:2160-2164` 逐字）⇒ 改成 `['agents']` 有把
+   *       **整个闸变哑巴**的风险（哑巴 = 一条都不拦），**绝不能改**。
+   *     · `ctx.get()` 也不行：本文件的**硬契约**是「对 `ctx` 的调用**只有** `ctx.on` 与
+   *       `ctx.effect`」（`:40` 逐字），自检的 Proxy（`selftest:204-212`）**记录每一次
+   *       `ctx` 属性访问** ⇒ `ctx.get(...)` 会留下一条 `GET(get)`，而且 `'get'` 逐字就在
+   *       自检的 `FORBIDDEN_PROPS`（`selftest:693`）里 ⇒ **㉔ / ㉔b 当场变红**。
+   *       （这个坑踩过一次：探针读 `ctx.id` 让 ㉔/㉔b 变红，去掉才修好 —— 见 `apply()` 的注释。）
+   *     · 事件是**官方**的，宿主自己就这么用：`dsh-agent-loop\lib\index.js:1607-1610` 逐字
+   *       `ownerCtx.on("agent/disposed", …)` / `ownerCtx.on("session/disposed", …)`。
+   *
+   *   ⚠ **降级方向**：这两条拿不到（宿主不发这个事件 / 版本变了 / 插件挂晚了错过）⇒
+   *     `disposedSids` 里没有对应 sid ⇒ `debtFor()` 照旧返回欠账 ⇒ **行为与今天逐字一致**。
+   *     监听器体全部包在 `onDisposed` 的 try/catch 里，**绝不外抛**。
+   */
+  disposers.push(ctx.on('agent/disposed', function (payload) {
+    onDisposed(state, payload, 'agent/disposed', deps)
+  }))
+  disposers.push(ctx.on('session/disposed', function (payload) {
+    onDisposed(state, payload, 'session/disposed', deps)
+  }))
+
   state.disposers = disposers
   return state
 }
@@ -2165,6 +2775,8 @@ function uninstall(state) {
   if (state) {
     state.read.clear(); state.cur.clear(); state.pending.clear()
     state.curTurn.clear(); state.steers.clear(); state.steersTurn.clear()
+    // ★ 本单新增：已结束 sid 的集合也要清（它是内存状态，与上面几个同族）
+    state.disposedSids.clear()
   }
   return state
 }
@@ -2191,7 +2803,8 @@ module.exports = {
     const state = install(ctx)
     /**
      * ★ 可逆：`ctx.on` 已经各自是 fiber effect；这里再用一个 effect 兜一层，
-     *   把**四条**监听与所有内存状态在卸载时一并清掉（`ctx.effect(execute)` 的返回值就是 disposer）。
+     *   把**六条**监听与所有内存状态在卸载时一并清掉（`ctx.effect(execute)` 的返回值就是 disposer）。
+     *   （本单新增 ⑤ `agent/disposed` 与 ⑥ `session/disposed` 两条 —— 原为四条。）
      */
     ctx.effect(function () {
       return function () { uninstall(state) }
@@ -2243,6 +2856,12 @@ module.exports = {
     steerText: steerText,
     /* ── ★ 自动写交接草稿（自检要能单独钉住每一个安全阀） ── */
     PLUGIN_VERSION: PLUGIN_VERSION,
+    /* ── ★★ A1/A2（2026-09-26）：自检与负控要能**单独**钉住这两个判据 ── */
+    HANDOVER_ARCHIVE_WORDS: HANDOVER_ARCHIVE_WORDS,
+    isArchivedHandoverName: isArchivedHandoverName,
+    buildHandoverSkeleton: buildHandoverSkeleton,
+    writeHandoverSkeleton: writeHandoverSkeleton,
+    ensureHandoverSkeleton: ensureHandoverSkeleton,
     HANDOVER_AUTO_MARK: HANDOVER_AUTO_MARK,
     HANDOVER_AUTO_WARN: HANDOVER_AUTO_WARN,
     HANDOVER_AUTO_PREFIX: HANDOVER_AUTO_PREFIX,
@@ -2263,5 +2882,10 @@ module.exports = {
     logAutoDraft: logAutoDraft,
     markAutoDraftRead: markAutoDraftRead,
     freshenAutoSettings: freshenAutoSettings,
+    /* ── ★ 本单（孤儿欠账）：出口 —— 自检/负控要能**单独**钉住每一条判据 ── */
+    ownerOfPending: ownerOfPending,
+    isOwnerDisposed: isOwnerDisposed,
+    sidOfDisposed: sidOfDisposed,
+    onDisposed: onDisposed,
   },
 }

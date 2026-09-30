@@ -1,6 +1,6 @@
 {
   "name": "SeptemberProjectTeam / task-warden (public edition)",
-  "date": "2026-09-26",
+  "date": "2026-09-30",
   "note": "Public edition. Machine-specific paths and the author's verbatim quotes are redacted; all paths are derived at runtime. Hashes are computed over LF-normalized text. Regenerate with the private publish/make-public.mjs, which also re-runs the leak scan.",
   "files": [
     {
@@ -10,8 +10,8 @@
     },
     {
       "rel": ".gitignore",
-      "size": 1623,
-      "sha256": "5857c560a919b57908178e3e7a0832b5fecb9c02cbafc59c4b201180b9cc6bcb"
+      "size": 1647,
+      "sha256": "2cbac3d3b84404cc128739996f40589429b67fc6918f379427fee1cdd635d1bf"
     },
     {
       "rel": "01-skill/README-安装说明.md",
@@ -20,8 +20,8 @@
     },
     {
       "rel": "01-skill/SKILL.md",
-      "size": 33543,
-      "sha256": "8f8d338da6e0bca21b8f968a99d6e4c47ec9c3b503691058abd96836d5f367ba"
+      "size": 35195,
+      "sha256": "93d4d13ec4c945531d2c715f926151e797b2a0d6a7a48330ed811653c388b102"
     },
     {
       "rel": "01-skill/bill-compare.mjs",
@@ -275,13 +275,13 @@
     },
     {
       "rel": "01-skill/warden.mjs",
-      "size": 501157,
-      "sha256": "dabb937a569010d4eeb90ed5462bba283ab846542a6311df096ad6a66e65235a"
+      "size": 505418,
+      "sha256": "fe4029395370cee802077fc24989b6fccf4d587c493920fd9cf57bf08de5311e"
     },
     {
       "rel": "02-preset-roles/README.md",
-      "size": 16228,
-      "sha256": "7d42e9620d1c7aca76d38005ef5bb16b50c1deec9e420fabee6745c5667cdebd"
+      "size": 19038,
+      "sha256": "aee2c3bb85e1ba5906bccbc030a648d3cb2f730793654a230b69b27ee4d13590"
     },
     {
       "rel": "02-preset-roles/agent.cordis.yml",
@@ -300,13 +300,13 @@
     },
     {
       "rel": "02-preset-roles/team-guard.mjs",
-      "size": 157770,
-      "sha256": "36a40ac6e8f851f174bb36b0042ca2393d5e654305d2ecb86f89f88f9ddda189"
+      "size": 182893,
+      "sha256": "6e53c2ecd439fe7abde0aa8d3c617b3a933f28b5b622aa8797e383d32ae4500c"
     },
     {
       "rel": "02-preset-roles/team-guard.selftest.mjs",
-      "size": 36164,
-      "sha256": "f7c08298e6587f4513d4281f70a877b3e94d9e75e0bedd60180461be3167b504"
+      "size": 52799,
+      "sha256": "d478da0d4481976c5288c33b6dc3c1e27a6ae1445f140fa6e57042ecf1c70136"
     },
     {
       "rel": "03-host-plugin/RESTORE.md",
@@ -320,13 +320,23 @@
     },
     {
       "rel": "03-host-plugin/branch-guard.js",
-      "size": 70026,
-      "sha256": "45ea2ac7714bedec5615df4df8ec987b05a75f8d69ba8b88c0b7d1b8eaf95b3a"
+      "size": 70591,
+      "sha256": "fe764778761c29f3a469f2def4e9c9a08a54753787152c45a1df0668405b57a1"
     },
     {
       "rel": "03-host-plugin/branch-guard.selftest.mjs",
-      "size": 64030,
-      "sha256": "a7f34172512955dedab8b758e3fa2ce41a9ed43b9b6330e4a0cc5f39cb9a6af2"
+      "size": 67310,
+      "sha256": "d7415cd6365486a1715e16907d7e3fa6385a0116139e63b7ab635a99571649a2"
+    },
+    {
+      "rel": "03-host-plugin/check-plugins-loaded.mjs",
+      "size": 8399,
+      "sha256": "a594d7ad46a3576a8c18dde5f9ead84c640753f3e7e9e8a57624e5aaf7c337d6"
+    },
+    {
+      "rel": "03-host-plugin/check-plugins-loaded.selftest.mjs",
+      "size": 11654,
+      "sha256": "03ff83628494256c61a20deaa02af09f4fdaafdd1ab410638e59810de567a398"
     },
     {
       "rel": "03-host-plugin/context-dedup.DESIGN.md",
@@ -335,8 +345,8 @@
     },
     {
       "rel": "03-host-plugin/context-dedup.js",
-      "size": 63852,
-      "sha256": "c035524c08c0c4afdfe6ca5ec38c32aecb45a342a383cad4feb4bb00d2fd2de5"
+      "size": 64677,
+      "sha256": "869ae98fbbbb24032b1dcfb2dba2e4fd69a19ceca8d434b9129ec18ea1cceab8"
     },
     {
       "rel": "03-host-plugin/context-dedup.selftest.mjs",
@@ -345,8 +355,13 @@
     },
     {
       "rel": "03-host-plugin/context-dedup.status.json",
-      "size": 120,
-      "sha256": "c62db03ec6a69fadcf7fe388b9cd5df9978d73df3063da3c6edd0ef6b9a0f6d2"
+      "size": 1328,
+      "sha256": "d897e3fd5d4078beaa6b5feb07e676865aee80de1d454e4c1afdda04c09c3aca"
+    },
+    {
+      "rel": "03-host-plugin/drift-heal.mjs",
+      "size": 23020,
+      "sha256": "f9397d04c8f36a35b673984483b39b9c0e5470abe952104dfea5fb64aafb1e9a"
     },
     {
       "rel": "03-host-plugin/gate.mjs",
@@ -365,13 +380,23 @@
     },
     {
       "rel": "03-host-plugin/handover-gate.js",
-      "size": 127068,
-      "sha256": "2760f251dc052b93c29559a23e45a48a8cbe8ab3ab53b31b7871b20b0edcccf4"
+      "size": 169372,
+      "sha256": "4b332c194c6c1cfd19852cea90d6222a2c7b2099846a54607d200d4a844a8936"
+    },
+    {
+      "rel": "03-host-plugin/handover-gate.js.bak-before-orphanfix-20260926",
+      "size": 127533,
+      "sha256": "1954740d7396ef6eab971ef45525efca99c233fb9a19286d8730f0b62e14923e"
     },
     {
       "rel": "03-host-plugin/handover-gate.selftest.mjs",
-      "size": 75196,
-      "sha256": "035f5cb5ea0a45bc1e826d74daf2383b6d1442f3677d0f50ef12ee4b7c3f0ec2"
+      "size": 78675,
+      "sha256": "91d3aba18ca0091796cb716a7dcf65f7c66fdcefa0038f497a96e6b03dafe5ea"
+    },
+    {
+      "rel": "03-host-plugin/handover-gate.selftest.mjs.bak-before-orphanfix-20260926",
+      "size": 75170,
+      "sha256": "9196b02bf1a474518f76c6a88628263f4870031cad08b663fbbb4c3e017933f4"
     },
     {
       "rel": "03-host-plugin/plugin-io.js",
@@ -415,8 +440,8 @@
     },
     {
       "rel": "03-host-plugin/warden-watch.js",
-      "size": 49021,
-      "sha256": "b93803a3de42a57a42f5a8dd0997f70795b21556e607b41d13b8782fd35f8248"
+      "size": 55417,
+      "sha256": "43f6b834bcd16088395a99eafa7b4b84c15c0e901f15ae4534ce5ae68448b3c2"
     },
     {
       "rel": "04-config/cordis.patch.yml",
@@ -429,14 +454,19 @@
       "sha256": "6f9cd5d269b2276cd9a95c1fc9e430e342e85676c82031cb5c57e23bb6628823"
     },
     {
+      "rel": "AGENTS.md",
+      "size": 4659,
+      "sha256": "9faa3ebcdf8749603edcdd95a10a68ea0ac2efedd8a5b1d3efe77955e4879017"
+    },
+    {
       "rel": "HANDOFF.md",
       "size": 6332,
       "sha256": "dc297efe37202536de618ca5caaad6b4ed193f868201937429dacaf260bbe8d0"
     },
     {
       "rel": "INSTALL.md",
-      "size": 23093,
-      "sha256": "6a58dde23fa40227c1d75ef4b9349f0d954ba5ee7b196057c9d6478eecec92c9"
+      "size": 26640,
+      "sha256": "083507ac800c1dcddf426607630c098e23c4d19e7d12946ee67b75879bac625c"
     },
     {
       "rel": "INSTALL.md.bak-before-fix-20260925",
@@ -450,8 +480,8 @@
     },
     {
       "rel": "README.md",
-      "size": 12879,
-      "sha256": "0ac6c33077d096c2fce6169b4873f6296167ce6a3ae867db26426bf0eb0aa381"
+      "size": 22802,
+      "sha256": "7021e80719403b41513f8a06e1500aa0d08c491c39f648bc37a50c6a2b350322"
     },
     {
       "rel": "THIRD-PARTY-NOTICES.md",
@@ -472,6 +502,11 @@
       "rel": "package.json.bak-before-typefix",
       "size": 263,
       "sha256": "fc7e1080ce69c1821d40b1b2dbf2f9e2194a7b1d8ac174f5fde45306584e12a9"
+    },
+    {
+      "rel": "交接.md",
+      "size": 2684,
+      "sha256": "40c5fbc375e06860d459119709aaf62d287b0fb9a93d951cb986bc4258aa2512"
     }
   ]
 }

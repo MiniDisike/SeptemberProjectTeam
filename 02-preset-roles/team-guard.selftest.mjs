@@ -18,6 +18,8 @@ import path from 'node:path'
 import {
   apply,
   denyReason,
+  detectDivergence,
+  detectPendingDecisions,
   doneGateReason,
   findProjectRoot,
   gateDecision,
@@ -455,6 +457,77 @@ check('isBrainRecordCall 不认 brain brief',
 check('isBrainRecordCall 不认 check',
   !isBrainRecordCall('pwsh', { command: `node "${W}" check` }))
 
+// ── R44：认"调用形态"，不认"路径字面" ───────────────────────────────
+// 病根：五个判据都写成 `/warden\.mjs["']?\s+record/` 这种字面正则 ⇒
+// `$w = "...warden.mjs"; node $w brain record` 全判 false ⇒ **闸自己瞎了**。
+// 实测反例见同目录 `_probe_regex.mjs`。下面每一条都对应上面某个真实逃逸形态。
+section('R44. 命令形态识别：路径写成变量也必须认得')
+
+// R44 主反例用的绑定：变量**指向真的 warden.mjs**（这正是现实里的逃逸形态 ——
+// 路径拼在变量里，字面正则看不见）。⚠ 这里必须是真的 `warden.mjs` basename：
+// 绑定可见时判据按绑定值判（见 `isWardenEntry`），绑成别的文件名不认才对。
+const VAR = '<HOME>\\.dsh\\skills\\task-warden\\warden.mjs'
+check('★ 变量路径 brain record 认得（R44 主反例）',
+  isBrainRecordCall('pwsh', { command: `$w = "${VAR}"; node $w brain record --artifact x` }))
+check('★ 变量路径 record 认得',
+  isRecordCall('pwsh', { command: `$w = "${VAR}"; node $w record --req R1 --status done` }))
+check('★ 变量路径 check 认得',
+  isCheckCall('pwsh', { command: `$w = "${VAR}"; node $w check` }))
+check('★ 变量路径 role say 认得',
+  isEngagementCall('pwsh', { command: `$w = "${VAR}"; node $w role say --role 审查 --text "x"` }))
+check('★ 变量路径 record --status done 认得',
+  isDoneClaimCall('pwsh', { command: `$w = "${VAR}"; node $w record --req R1 --status done` }))
+check('★ ${VAR} 花括号形态认得',
+  isCheckCall('bash', { command: `W=/x/warden.mjs; node \${W} check` }))
+check('★ $env: 形态认得',
+  isCheckCall('pwsh', { command: `node $env:WARDEN check` }))
+check('★ %VAR% 形态认得（cmd）',
+  isCheckCall('pwsh', { command: `node %WARDEN% check` }))
+check('★ 无引号绝对路径认得（旧契约）',
+  isRecordCall('pwsh', { command: `node ${W} record --req R1` }))
+check('★ 任意目录下的 warden.mjs 认得',
+  isCheckCall('bash', { command: 'node /home/u/.dsh/skills/task-warden/warden.mjs check' }))
+check('★ 语句中段调用认得（前置别的命令）',
+  isBrainRecordCall('pwsh', { command: `node "${W}" check; node $w brain record --artifact x` }))
+check('★ 变量在前置语句里赋值也认得',
+  isCheckCall('pwsh', { command: `$w = "${VAR}"\nnode $w check` }))
+
+// ── 负控：不许把"提到"当"调用"（这些若变 true，说明判据变松了）─────
+check('✗ 负控：grep 提到 warden.mjs record 不算',
+  !isRecordCall('pwsh', { command: `grep -n "warden.mjs record" notes.md` }))
+check('✗ 负控：echo 提到不算',
+  !isCheckCall('pwsh', { command: `echo "node warden.mjs check"` }))
+check('✗ 负控：cat 文件里的字符串不算',
+  !isBrainRecordCall('pwsh', { command: `cat script.sh  # node warden.mjs brain record` }))
+check('✗ 负控：子命令跨语句分隔符不算',
+  !isRecordCall('pwsh', { command: `node $w check; record --status done` }))
+check('✗ 负控：变量裸用（不是调用位）不算',
+  !isCheckCall('pwsh', { command: `echo $w check` }))
+check('✗ 负控：非 warden 入口 + 变量不认',
+  !isBrainRecordCall('pwsh', { command: `$x = "other.mjs"; node $x brain record` }))
+check('✗ 负控：绑定可见为非 warden ⇒ 不认（哪怕名字像）',
+  !isCheckCall('bash', { command: 'W=/x/gate.mjs; node $W check' }))
+check('★ 绑定可见为 warden.mjs ⇒ 认（与上一条成对）',
+  isCheckCall('bash', { command: 'W=/x/warden.mjs; node $W check' }))
+check('★ 绑定不可见 ⇒ 放过（方向性：宁假阳不静默假阴）',
+  isCheckCall('pwsh', { command: 'node $unknownVar check' }))
+check('✗ 负控：--status done 必须落在同一次 record 调用里',
+  !isDoneClaimCall('pwsh', { command: `node $w check; node $w record --req R1` }))
+check('✗ 负控：role brief 仍不算参与（R44 不放松原契约）',
+  !isEngagementCall('pwsh', { command: `node $w role brief --role 资料员 --question "x"` }))
+check('✗ 负控：init 仍不算参与',
+  !isEngagementCall('pwsh', { command: `$w = "${VAR}"; node $w init` }))
+check('✗ 负控：find add 认得但 find list 不认',
+  isEngagementCall('pwsh', { command: `node $w find add --by 审查 --text "x"` })
+  && !isEngagementCall('pwsh', { command: `node $w find list` }))
+check('✗ 负控：非 shell 工具一律 false',
+  !isBrainRecordCall('write', { file_path: 'x.js' })
+  && !isCheckCall('write', { file_path: 'x.js' })
+  && !isRecordCall('present', { files: [] }))
+check('✗ 负控：空/坏输入不炸',
+  !isCheckCall('pwsh', {}) && !isCheckCall('pwsh', null)
+  && !isCheckCall('pwsh', { command: '' }) && !isCheckCall('pwsh', { command: 123 }))
+
 check('isPresentCall 认得 present 工具',
   isPresentCall('present', { files: [{ path: 'x.md' }] }))
 check('isPresentCall 不认 write',
@@ -524,6 +597,86 @@ check('presentGateReason 明说重试不会放行', presentReason.includes('重�
   check('★ present 闸：派了脑子后 present ⇒ allow',
     presentCall2?.kind !== 'deny')
 
+  // ── R44 端到端：闸**自己**认不认变量写法（不是只测判据函数）────────
+  // 这一块才是第 3 条那个洞的真正判据：判据函数认得 ≠ 闸会因此放行。
+  // 用**全新会话状态**（新 fakeCtx + 新 apply），避免上一段的 st 残留造成假绿。
+  {
+    const ctx3 = fakeCtx()
+    apply(ctx3)
+    const pre3 = ctx3.listeners.get('tools/pre-execute')[0]
+    const post3 = ctx3.listeners.get('tools/post-execute')[0]
+    const agent3 = { session: { header: { cwd: tmp, origin: undefined } } }
+    const V = '$' + '{w}' // `${w}` —— 变量形态，字面正则看不见
+    // 变量写法的完整命令（**不要**在模板串里写 `${...}`：实测会被 JS 解析成
+    // 空/错的东西，生成形如 `${w{'}'}` 的坏文本，夹具自己骗自己）。
+    const varBrain = '$w = "' + W + '"; node ' + V + ' brain record --artifact y --brain A --verdict accept'
+    const varRec = '$w = "' + W + '"; node ' + V + ' record --req R2 --status done'
+    const varCheck = '$w = "' + W + '"; node ' + V + ' check'
+
+    // ⚠ 前置：先让角色闸"参与"。否则 brain 调用会被角色闸先拦、**走不到置位行**
+    //   （实测踩过：不先 engage，下面的 ② 会假失败 —— 那是夹具次序问题，不是闸的洞）。
+    await pre3({ name: 'subagent_liaison', arguments: {}, agent: agent3 }, allow2)
+
+    // ① 变量写法的 brain record ⇒ present 必须放行（旧代码这里是 deny）
+    const prePresent = await pre3({
+      name: 'present',
+      arguments: { files: [{ path: path.join(tmp, 'y.md') }] },
+      agent: agent3,
+    }, allow2)
+    check('R44-① 未派脑子 ⇒ present 先被拦（前置条件成立）',
+      prePresent?.kind === 'deny' && prePresent?.gate === 'present',
+      `got ${JSON.stringify(prePresent)}`)
+
+    const brainVar = await pre3({
+      name: 'pwsh',
+      arguments: { command: varBrain },
+      agent: agent3,
+    }, allow2)
+    check('R44-②a 变量路径 brain record 被认出（判据层）',
+      isBrainRecordCall('pwsh', { command: varBrain }))
+    check('R44-②b 变量路径 brain record 本身放行',
+      brainVar?.kind !== 'deny', `got ${JSON.stringify(brainVar)}`)
+
+    const afterVar = await pre3({
+      name: 'present',
+      arguments: { files: [{ path: path.join(tmp, 'y.md') }] },
+      agent: agent3,
+    }, allow2)
+    check('R44-②c ★ 变量路径 brain record ⇒ present 放行（这就是修的洞）',
+      afterVar?.kind !== 'deny',
+      `got ${JSON.stringify(afterVar)}`)
+
+    // ③ 变量写法的 check：**新会话**（避免上面已置位的 state 造成假绿）
+    const ctx4 = fakeCtx()
+    apply(ctx4)
+    const pre4 = ctx4.listeners.get('tools/pre-execute')[0]
+    const post4 = ctx4.listeners.get('tools/post-execute')[0]
+    const agent4 = { session: { header: { cwd: tmp, origin: undefined } } }
+    await pre4({ name: 'subagent_liaison', arguments: {}, agent: agent4 }, allow2)
+
+    const doneBefore = await pre4({
+      name: 'pwsh',
+      arguments: { command: varRec },
+      agent: agent4,
+    }, allow2)
+    check('R44-③ 变量路径、未跑 check ⇒ done 闸仍拦（闸没瞎）',
+      doneBefore?.kind === 'deny' && doneBefore?.gate === 'done',
+      `got ${JSON.stringify(doneBefore)}`)
+
+    await post4({
+      name: 'pwsh',
+      arguments: { command: varCheck },
+      agent: agent4,
+    }, { content: [{ type: 'text', text: '需求监督通过：0 条未通过' }] }, allow2)
+    const doneAfter = await pre4({
+      name: 'pwsh',
+      arguments: { command: varRec },
+      agent: agent4,
+    }, allow2)
+    check('R44-④ ★ 变量路径 check 通过后 ⇒ done 放行（旧代码这里被误拦）',
+      doneAfter?.kind !== 'deny',
+      `got ${JSON.stringify(doneAfter)}`)
+  }
   // 子代理的 record --status done 不被拦
   const subAgent2 = { session: { header: { cwd: tmp, origin: 'subagent' } } }
   const subDone = await preTool2({
@@ -626,6 +779,152 @@ check('triageGateReason 明说重试不会放行', triReason.includes('重试不
   }, allow3)
   check('★ 分诊闸：投票过半后 present ⇒ allow',
     presentTri2?.kind !== 'deny', `got ${JSON.stringify(presentTri2)}`)
+}
+
+// ───────────────────────────────────────────────── 10. 分歧检测：detectDivergence
+
+section('10. 分歧检测：detectDivergence')
+
+check('detectDivergence 空字符串 ⇒ []',
+  Array.isArray(detectDivergence('')) && detectDivergence('').length === 0)
+check('detectDivergence 无 .warden ⇒ []',
+  Array.isArray(detectDivergence(tmp)) && detectDivergence(tmp).length === 0)
+
+{
+  const divDir = path.join(tmp, 'divergence-test')
+  const wDir = path.join(divDir, '.warden')
+  fs.mkdirSync(wDir, { recursive: true })
+  const findingsPath = path.join(wDir, 'FINDINGS.jsonl')
+  const isoD = (n) => new Date(Date.parse('2026-09-26T00:00:00Z') + n * 1000).toISOString()
+
+  // 两个角色对 R7 发言、无投票 ⇒ 应检出
+  fs.writeFileSync(findingsPath, [
+    JSON.stringify({ at: isoD(1), by: '审查', kind: '事实', text: 'A', ref: 'R7' }),
+    JSON.stringify({ at: isoD(2), by: '记录', kind: '事实', text: 'B', ref: 'R7' }),
+  ].join('\n') + '\n', 'utf8')
+  const div1 = detectDivergence(divDir)
+  check('detectDivergence 2 角色对 R7 发言、无投票 ⇒ [R7]',
+    div1.length === 1 && div1[0].ref === 'R7' && div1[0].roles.length === 2,
+    JSON.stringify(div1))
+
+  // 加了投票记录 ⇒ 不再检出
+  fs.writeFileSync(path.join(wDir, 'VOTES.jsonl'), [
+    JSON.stringify({ topic: 'R7', role: '监督员', choice: 'A', at: isoD(3) }),
+  ].join('\n') + '\n', 'utf8')
+  const div2 = detectDivergence(divDir)
+  check('detectDivergence R7 已有投票 ⇒ []',
+    div2.length === 0, JSON.stringify(div2))
+
+  // 只有 1 个角色发言 ⇒ 不检出（不是分歧）
+  fs.writeFileSync(findingsPath, [
+    JSON.stringify({ at: isoD(1), by: '审查', kind: '事实', text: 'A', ref: 'R8' }),
+  ].join('\n') + '\n', 'utf8')
+  fs.rmSync(path.join(wDir, 'VOTES.jsonl'), { force: true })
+  const div3 = detectDivergence(divDir)
+  check('detectDivergence 1 角色发言 ⇒ []（不是分歧）',
+    div3.length === 0, JSON.stringify(div3))
+}
+
+// ─────────────────────────── 10b. 待决选择检测：detectPendingDecisions（R44b）
+//
+// 为什么加这一节：用户报「角色投票出现的次数很少，除了我主动提基本没出现过」。
+// 实测根因 = 旧判据（≥2 角色发言）选错了地方：21 个 ref 全中、13 个从没投过，
+// 被点名的 5 个 ref 是 **100% 纯事实**（无选项可投）⇒ 提示退化成 3 天不变的噪音。
+// 新判据找**可选项**（裁决 / 互斥方案 / 撤回），且**要看位置**（见下面负控）。
+
+section('10b. 待决选择检测：detectPendingDecisions')
+
+check('detectPendingDecisions 空字符串 ⇒ []',
+  Array.isArray(detectPendingDecisions('')) && detectPendingDecisions('').length === 0)
+check('detectPendingDecisions 无 .warden ⇒ []',
+  Array.isArray(detectPendingDecisions(tmp)) && detectPendingDecisions(tmp).length === 0)
+
+{
+  const pdDir = path.join(tmp, 'pending-test')
+  const pDir = path.join(pdDir, '.warden')
+  fs.mkdirSync(pDir, { recursive: true })
+  const fPath = path.join(pDir, 'FINDINGS.jsonl')
+  const vPath = path.join(pDir, 'VOTES.jsonl')
+  const isoP = (n) => new Date(Date.parse('2026-09-26T00:00:00Z') + n * 1000).toISOString()
+  const write = (rows) => fs.writeFileSync(fPath, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8')
+
+  // ── 正控 ①：单方面裁决（**一个人的决定词在开头**）⇒ 检出
+  write([
+    { at: isoP(1), by: '方向员', kind: '事实', text: 'R9块1裁决②依赖边：coco-app 必须加 coco-paint', ref: 'R9' },
+  ])
+  fs.rmSync(vPath, { force: true })
+  const pd1 = detectPendingDecisions(pdDir)
+  check('★ 单人裁决（决定词在开头）⇒ 检出 verdict',
+    pd1.length === 1 && pd1[0].kind === 'verdict' && pd1[0].ref === 'R9',
+    JSON.stringify(pd1))
+
+  // ── 负控 ①：**"实测+定案"是事实的定案，不是决定** ⇒ 不检出
+  //     （这条源自实测假阳：资料员「DPI-aware 实测定案（探针…」被误判）
+  write([
+    { at: isoP(1), by: '资料员', kind: '事实', text: 'DPI-aware 实测定案（探针）：客户区 2304x1242 物理', ref: 'R9' },
+  ])
+  const pd2 = detectPendingDecisions(pdDir)
+  check('✗ 负控：「实测定案」是事实不是决定 ⇒ 不检出',
+    pd2.length === 0, JSON.stringify(pd2))
+
+  // ── 负控 ②：**决定词埋在正文深处**（不在开头）⇒ 不检出
+  //     （实测假阳：资料员那条「根因更正…」的触发词在第 **805** 字）
+  write([
+    { at: isoP(1), by: '资料员', kind: '事实', text: '【交付·证据很硬】① 根因：装饰实测 15×38，不是主代理猜的 47；' + 'x'.repeat(200) + ' 这里顺带提到裁决二字', ref: 'R9' },
+  ])
+  const pd3 = detectPendingDecisions(pdDir)
+  check('✗ 负控：决定词埋在正文深处（非开头）⇒ 不检出',
+    pd3.length === 0, JSON.stringify(pd3))
+
+  // ── 负控 ③：**≥2 角色发言但全是事实** ⇒ 不检出（这正是被换掉的旧判据）
+  write([
+    { at: isoP(1), by: '资料员', kind: '事实', text: 'gpu.rs 画不出任意四边形（三条独立判据）', ref: 'R12' },
+    { at: isoP(2), by: '方向员', kind: '事实', text: '立方体接线层必须按 z_cam 深度排序', ref: 'R12' },
+  ])
+  const pd4 = detectPendingDecisions(pdDir)
+  check('✗★ 负控：2 角色发言但全是事实 ⇒ **不检出**（旧判据在这里误报）',
+    pd4.length === 0, JSON.stringify(pd4))
+
+  // ── 正控 ②：互斥方案共存 ⇒ 检出 options
+  write([
+    { at: isoP(1), by: '资料员', kind: '事实', text: '甲、走文本禁令；乙、走依赖图判据 —— 两者互斥', ref: 'R9' },
+  ])
+  const pd5 = detectPendingDecisions(pdDir)
+  check('★ 互斥方案（甲…乙…）⇒ 检出 options',
+    pd5.length === 1 && pd5[0].kind === 'options', JSON.stringify(pd5))
+
+  // ── 正控 ③：决定层的撤回/更正 ⇒ 检出 reversal
+  write([
+    { at: isoP(1), by: '方向员', kind: '事实', text: '撤回上一轮「先定配对再动块1」，那句过严', ref: 'R9' },
+  ])
+  const pd6 = detectPendingDecisions(pdDir)
+  check('★ 决定层撤回（撤回上一轮…）⇒ 检出 reversal',
+    pd6.length === 1 && pd6[0].kind === 'reversal', JSON.stringify(pd6))
+
+  // ── 负控 ④：已投票 ⇒ 不再待决（options/reversal 走 ref 级判据）
+  write([
+    { at: isoP(1), by: '资料员', kind: '事实', text: '甲、走文本禁令；乙、走依赖图判据 —— 两者互斥', ref: 'R9' },
+  ])
+  fs.writeFileSync(vPath, [JSON.stringify({ topic: 'R9', role: '监督员', choice: '甲', at: isoP(3) })].join('\n') + '\n', 'utf8')
+  const pd7 = detectPendingDecisions(pdDir)
+  check('✗ 负控：R9 已投票 ⇒ 不再检出',
+    pd7.length === 0, JSON.stringify(pd7))
+
+  // ── 正控 ④：**ref 投过票，但这条裁决没被投过** ⇒ 仍要检出
+  //     （实测踩过：R39 下 12 条裁决，因 `R39-T1-默认笔宽…` 投过 ⇒ 整个 R39 被跳过）
+  fs.writeFileSync(vPath, [JSON.stringify({ topic: 'R9-T1-默认笔宽与默认视距的配对', role: '监督员', choice: '丙', at: isoP(3) })].join('\n') + '\n', 'utf8')
+  write([
+    { at: isoP(1), by: '方向员', kind: '事实', text: 'R9块2裁决⑦出厂装几个视口 = 4 个，也不新开议题', ref: 'R9' },
+  ])
+  const pd8 = detectPendingDecisions(pdDir)
+  check('★ ref 投过票但那**条裁决**没投过 ⇒ 仍检出（粒度修正）',
+    pd8.length === 1 && pd8[0].kind === 'verdict', JSON.stringify(pd8))
+
+  // ── 正控 ⑤：ageDays 存在且有序（噪音折叠要用它）
+  const pd9 = detectPendingDecisions(pdDir)
+  check('返回项带 ageDays（数值、≥0）',
+    pd9.length === 1 && typeof pd9[0].ageDays === 'number' && pd9[0].ageDays >= 0,
+    JSON.stringify(pd9))
 }
 
 // ───────────────────────────────────────────────── 结果

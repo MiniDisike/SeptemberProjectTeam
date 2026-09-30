@@ -212,7 +212,7 @@ function markPluginLoadedWithRetry(pluginId, version, hostId) {
  * （不然升级之后没法分辨"新版本没加载"和"旧版本还活着"）。
  * 改这个文件里任何**会影响行为**的东西时，请一并把它 +1（口径：语义化版本 `MAJOR.MINOR.PATCH`）。
  */
-const VERSION = '1.0.0-loadmark'
+const VERSION = '1.0.1-loadmark'
 
 /* -------------------------------------------------------------------- 默认值 */
 const DEFAULTS = Object.freeze({
@@ -1054,8 +1054,17 @@ function apply(ctx, rawConfig) {
   /* ★ 加载即留痕：**整个插件生命周期里只写这一次**（不在任何热路径上）。
    *   写失败静默降级（`markPluginLoaded*` 内部已经吞掉所有异常）。
    *   位置选在 `apply()` 最前面：宿主调用 `apply` 本身就等于"这个插件加载成功了"，
-   *   所以留痕不该等任何后续步骤 —— 哪怕下面 `resolveConfig` 抛了，留痕也已经如实写下。 */
-  markPluginLoadedWithRetry(name, VERSION, ctx && ctx.id)
+   *   所以留痕不该等任何后续步骤 —— 哪怕下面 `resolveConfig` 抛了，留痕也已经如实写下。
+   *   ⚠ **第 3 个实参 `hostId` 故意不传**（旧稿写 `ctx && ctx.id`）：在 cordis 4.0.2 上读 `ctx.id`
+   *     **不是"留一次痕迹"而是直接抛** `cannot get property "id" without inject`
+   *     （`@deepseek-ai/cordis/lib/index.js:675`；`Context` 上根本没有 `id` 这个属性，
+   *     属性表见 `cordis/lib/types/context.d.ts`）⇒ `apply()` 第一行就炸，
+   *     整条 composition 被记成 `1 entry did not activate`（2026-09-26 实测：
+   *     用户在 GUI 里加模型时屏幕上报的就是这一句）。
+   *     同批的另外 4 份（role-voices / handover-gate / branch-guard / report-spill）
+   *     早已是"不传"的写法，**只有本文件与 warden-watch 漏改**。
+   *     `hostId` 是可选参数 ⇒ 不传就**整个键都不出现**，留痕照常工作。 */
+  markPluginLoadedWithRetry(name, VERSION)
 
   let lastStatusWriteAt = 0
   const STATUS_PATH = path.join(__dirname, 'context-dedup.status.json')

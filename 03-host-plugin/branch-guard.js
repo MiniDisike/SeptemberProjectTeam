@@ -830,7 +830,12 @@ function decide(input, deps) {
       if (typeof v === 'string' && v.trim()) rawTargets.push(v.trim())
     }
   } else {
-    const re = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)[^\s"'`;|)>]+/g
+    // ★ 第三个分支要求 `/` 后面**至少 2 个字符**：排除 `cmd /c`、`cmd /d`、`cmd /k` 等
+    //   cmd.exe 的**单字母调用前缀**（它们不是路径）。真实 Unix 绝对路径 ≥ 2 字符
+    //   （`/home`、`/usr`、`/c/Windows`），相对路径与 UNC 路径不受影响。
+    //   实测洞（2026-09-30）：`cmd /c "…\refresh_bg.cmd" 2>&1` 的 `/c` 被当成路径提取，
+    //   理由里写着「要写的 `/c` 落在正在被细化的支线上」—— 而 `/c` 不是路径。
+    const re = /(?:[A-Za-z]:[\\/][^\s"'`;|)>]+|\.{1,2}[\\/][^\s"'`;|)>]+|\/[^\s"'`;|)>][^\s"'`;|)>]+)/g
     let m
     while ((m = re.exec(text)) !== null) rawTargets.push(m[0])
   }
