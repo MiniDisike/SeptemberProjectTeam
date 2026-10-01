@@ -90,6 +90,39 @@ const MODULES = [
   'L40_visible_speech',
   'L41_pipe_round2',
   'L42_window_scope',
+  /**
+   * ★★ 2026-09-30 追加：L43（**只追加**，上面每一条同名同序一个字都没动）。
+   *   · L43_gate_contract：硬闸契约（执行无预算 / 每次拦都有理由 / 不静默 / 补救路真能走 / 豁免不被预算吃掉）。
+   *     ⚠ L43 的**文件早就在册目录里、却一直不在 `MODULES`** ⇒ "建了却跑不到 = 等于没有"。
+   *     本次顺手把它补进册（只加一行登记，文件内容一个字没动）。
+   * ⇒ 发现约定没变：文件名必须是 `L<数字>_…`（`discoverLabIds` 认 `/^(L\d+)/`），
+   *     且**必须**在这里登记一行，否则 `run-all.mjs` 跑不到它。
+   */
+  'L43_gate_contract',
+  /**
+   * ★★ 2026-10-01 追加：L46_handover_date_prefix（**只追加**，上面每一条同名同序一个字都没动）。
+   *   · 守的是 **P-M34**：`plugin\handover-gate.js` 里 `dateOfHandoverName`（:344）的正则放宽，
+   *     让**新命名约定** `交接-<会话短8位>-第<N>轮-<YYYY-MM-DD>-<角色>-<主题>.md` 能取到日期键。
+   *     旧正则只认 `交接-YYYY-M-D.md` / `交接-第N轮-YYYY-MM-DD.md` 两种形状
+   *     ⇒ 新起的名字一律 `date=''` ⇒ `resolveHandover` 的 `dated` 池为空
+   *     ⇒「挑最新一份交接」**退化成按 mtime**（mtime 的语义是"文件什么时候被写的"，不是交接的语义）。
+   *   ⚠ 登记 ≠ 一定绿：本文件只负责"看见"每一个用例；真实状态由检查项与
+   *     「有 FAIL 就 1」如实打出来 —— **不许假绿**。
+   */
+  'L46_handover_date_prefix',
+  /**
+   * ★★ 2026-10-01 追加：L47_handover_ledger_evidence（**只追加**，上面每一条同名同序一个字都没动）。
+   *   · 守的是 **P-M35**：`plugin\handover-gate.js` 三个缺陷 ——
+   *     ① `WRITE_HINTS` 把 `2>$null` / `2>NUL`（**丢弃 stderr、什么都不写**）判成"改盘"
+   *       ⇒ 只读 shell 被灌进写闸的脏清单；
+   *     ② `state.pending.delete(rootKey)` 返回 false 时**账本里一行都不落**（静默失效）；
+   *     ③ `logRow` 去重键里没有 `rootKey` ⇒ 同一 sid 同一回合的**多个工程根共用一个键**
+   *       ⇒ 3 秒内只落一行 `turn-dirty`，被吃掉的那条恰是唯一能证明路径取到了的证据。
+   *   · **每条都有反例**：把对应那一处修复删掉，用例分别变红（`L47-C2` / `L47-A1+A2` / `L47-B1`）——
+   *     靠的是 `HANDOVER_GATE_JS` 指到"删掉修复的变体"，A/B 对照组用 `HANDOVER_GATE_BASELINE_JS` 指原件。
+   *   · 本用例**不 spawn 任何子进程**（只 `fs` + `require`）⇒ 不受"管道 stdio EPERM"影响。
+   */
+  'L47_handover_ledger_evidence',
 ];
 
 const argv = process.argv.slice(2);

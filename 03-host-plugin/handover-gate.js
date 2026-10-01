@@ -230,8 +230,21 @@ const PRESENT_TOOLS = Object.freeze(['present'])
  *   `> file` / `>> file` 命中；`2>&1` / `>&1` 不命中。
  * ⚠ 仍然**拦不住** `node script.mjs`（脚本内部写盘）、`python -c "open(...).write()"`、
  *   以及任何拼出来的路径 —— 这时它**不会被记成脏**（如实标注，不许说成"防住了 shell"）。
+ *
+ * ★ 2026-10-01（P-M35）：最后一个分支 `>\s*[^&\s]` **把"丢弃 stderr"判成了改盘**。
+ *   实测（用下面这个正则的常量**原样**构出来、在 node 内存里跑的，不是读码推的）：
+ *     `$js | & $node -e "0" -- 2>$null | Out-Null` ⇒ 命中（**误报**）
+ *     `2>NUL`                                      ⇒ 命中（**误报**）
+ *   `2>$null` / `2>NUL` 是**丢弃 stderr、什么都不写** ⇒ 被记成"这个 shell 改了文件"
+ *   ⇒ 写闸的脏清单被**只读 shell** 灌满（实测 `dirty=14` 那笔账就是这么来的）。
+ *   ⇒ 现在**只**把「重定向目标是丢弃目标」排除掉。**精确，不许放宽成"不认重定向"**：
+ *     · 排除的只有 `$null`（大小写不敏感）与 `NUL`，且**整个 token 必须就是它**
+ *       （后面跟分隔符 `空白 ; , ) | &` 或字符串结尾；`$nullx` / `nul.txt` **不算**丢弃）；
+ *     · `> file` / `>> file` / `*>` / `2> somefile`（stderr **进文件**）**仍然是写**；
+ *     · `2>&1` / `>&1` 照旧**不命中**（`&` 被 `[^&\s]` 排除）—— 这一条没动。
+ *   ⚠ 如实：bash 的 `2>/dev/null` 仍判**写**（不在本单的排除清单里；要收窄是另一单，别混进来）。
  */
-const WRITE_HINTS = /(Set-Content|Add-Content|Out-File|Set-ItemProperty|Remove-Item|Move-Item|Copy-Item|New-Item|Clear-Content|Rename-Item|tee\b|sed\s+-i|truncate|\bdd\s+if=|>\s*[^&\s])/i
+const WRITE_HINTS = /(Set-Content|Add-Content|Out-File|Set-ItemProperty|Remove-Item|Move-Item|Copy-Item|New-Item|Clear-Content|Rename-Item|tee\b|sed\s+-i|truncate|\bdd\s+if=|>\s*(?!(?:\$null|\bNUL)(?:[\s;,)|&]|$))[^&\s])/i
 
 /**
  * ★★ 三条硬规矩 —— **逐条逐字**，**全部从权威源机器抽取**。
@@ -343,8 +356,31 @@ function dateOfHandoverName(n) {
    *   一个工程里那些按轮文件会**全部 `date=''` ⇒ 退到 mtime** ⇒ 挑出的"最新一份"可能是错的
    *   （这正是本文件 L283-285 批评过的"把口径偷偷退回 mtime"）。
    * ⚠ **只放宽、不收紧**：`交接-2026-09-24.md` 这类旧名**仍然被认**（可选段 `(?:第\d+轮-)?`）。
-   * 中间只允许 `第<数字>轮-`，不许任何别的字 —— 免得把垃圾名字放进来赢过真日期。 */
-  const m = /^交接-(?:第\d+轮-)?(\d{4})-(\d{1,2})-(\d{1,2})\.md$/.exec(String(n || ''))
+   * 中间只允许 `第<数字>轮-`，不许任何别的字 —— 免得把垃圾名字放进来赢过真日期。
+   *
+   * ★ P-M34（2026-10-01）再放宽一档：**新命名约定**那一段前缀。
+   *   约定形状（逐字）：`交接-<会话短8位>-第<N>轮-<YYYY-MM-DD>-<角色>-<主题>.md`，
+   *   例 `交接-110ef306-第3轮-2026-10-01-coder-交接窗口标号.md`。
+   *   为什么必须支持：旧正则只认两种形状（`交接-YYYY-M-D.md` / `交接-第N轮-YYYY-MM-DD.md`），
+   *   于是**今天新起的名字一律 `date=''`** ⇒ `resolveHandover`（:527-535）的 `dated` 池为空
+   *   ⇒「挑最新一份交接」**退化成按 mtime**。而 mtime 的语义是"这个文件什么时候被写的"，
+   *   **不是**交接的语义（这正是 `compareLatestHandover` 上面那段注释自己批评的那件事）。
+   *   ⇒ ⚠ 这**不是新引入的退化，是早就存在、今天被新约定顶到脸上**。
+   * 三段各自的边界（**为什么不放宽成"任意前缀 + 任意后缀"**）：
+   *   · 会话短码：**恰好 8 位、小写字母+数字**（`[0-9a-z]{8}`）。放成 `[^\s-]+` 的话
+   *     `交接-随便什么-2026-10-01.md` 也会被认；**大写也不放**
+   *     （`交接-ABCDEFGH-2026-10-01.md` 仍然取不到日期键）。
+   *     ⚠ 短码后头的 `第\d+轮-` **可省**（只放宽，不收紧：约定里带，省了也不该被拒）。
+   *   · 轮号段仍复用**同一个** `第\d+轮-` 语法，不新造第二套。
+   *   · 结尾 `<角色>-<主题>`：**允许存在**，但**不许顶替日期位** ——
+   *     日期组是**必需**的（不是可选），且尾部首字符**不许是数字**：
+   *     这样 `交接-2026-10-01-2026-12-31-….md` 这种**带两个日期**的名字就不会被含糊地取第一个。
+   *     尾部字符类 `[^/\\]*` 挡路径分隔符（名字来自 `readdirSync` 本来也不含；这是防御）。
+   * ⚠ **`isArchivedHandoverName` 行为零变化**：本函数只管"取日期键"；
+   *   `归档`/`全文` 的排除在 `isArchivedHandoverName`（:328-334）里，而 `listHandovers`
+   *   在 `:437` **先** `continue` 掉归档件、**后** 才在 `:444` 调本函数
+   *   ⇒ 新正则**没有、也不可能**把归档件救回选举池。判据见 lab `L46_handover_date_prefix.mjs`。 */
+  const m = /^交接-(?:[0-9a-z]{8}-(?:第\d+轮-)?)?(?:第\d+轮-)?(\d{4})-(\d{1,2})-(\d{1,2})(?:-[^0-9/\\][^/\\]*)?\.md$/.exec(String(n || ''))
   if (!m) return ''
   const mo = Number(m[2])
   const dy = Number(m[3])
@@ -764,15 +800,30 @@ function fail(state, ev, detail, deps) {
   return row
 }
 
-/** 同一 (ev,sid,gate,tool,target) 在这么长时间内只落一行 —— 防"deny 风暴"把日志刷爆 */
+/** 同一 (ev,sid,gate,tool,rootKey,target) 在这么长时间内只落一行 —— 防"deny 风暴"把日志刷爆 */
 const LOG_DEDUPE_MS = 3000
 
-/** 落一行观测（best-effort；失败绝不影响工具调用；同一事件 3 秒内只落一次） */
+/**
+ * 落一行观测（best-effort；失败绝不影响工具调用；同一事件 3 秒内只落一次）。
+ *
+ * ★ 2026-10-01（P-M35，缺陷 B）：去重键里**加了 `rootKey`**。
+ *   旧键是 `ev|sid|gate|tool|path||target` ⇒ **`turn-dirty` 行既没有 `path` 也没有 `target`**
+ *   （`finalizeUpTo` 的 `dirty` 行只有 `root` / `rootKey` / `paths`，`:963-966`）
+ *   ⇒ **同一个 sid、同一回合的多个工程根共用同一个键** ⇒ 3 秒内只落**一行**。
+ *   实测：同一 sid 在同一回合踩了 `<工程根A>` 与 `<工程根B>` 两个根，
+ *   账本里**只有前一条** —— 而被吃掉的那一条恰恰是**唯一**能证明路径取到了的证据。
+ *   ⚠ **这是取舍，不是白赚**：`finalizeUpTo` 对每个 `(sid, turn, rootKey)` **只发一行**
+ *   （`b.roots` 是 Map，`:934` 的循环每个 rootKey 恰好一次）⇒ 加了 `rootKey`
+ *   **不会**让"同回合同根的多条脏条目"开始重复落盘；分开的只有**不同工程根**。
+ *   ⚠ 仍然存在的洞（如实标注，不在本单范围）：键里**没有 `turn`** ⇒ 同一 sid 同一根
+ *     **相邻两个回合**在 3 秒内收尾，仍会吃掉后一行。要收窄是另一单。
+ */
 function logRow(state, row, deps) {
   try {
     if (!state.logPath) return
     const key = String(row.ev || '') + '|' + String(row.sid || '') + '|' + String(row.gate || '')
-      + '|' + String(row.tool || '') + '|' + String(row.path || row.target || '')
+      + '|' + String(row.tool || '') + '|' + String(row.rootKey || row.root || '')
+      + '|' + String(row.path || row.target || '')
     const now = Date.now()
     if (now - numOr(state.logSeen.get(key), 0) < LOG_DEDUPE_MS) { state.logSkipped += 1; return }
     state.logSeen.set(key, now)
@@ -2309,6 +2360,23 @@ function onToolResult(state, exec, result, deps, opts) {
         return
       }
       slot.handoverTouched = true
+      /**
+       * ★ 2026-10-01（P-M35，缺陷 A）：**无条件**落一行"这次写交接被记账侧看见了"。
+       *   为什么必须无条件：`state.pending.delete(rootKey)` 返回 **false** 时，
+       *   下面既不落 `write-gate-cleared`、`handover-updated` 又只**进内存 ring 不落盘**
+       *   ⇒ **账本里一行都不落** ⇒ 查账本**分不清**「这次调用压根没被记账侧看见」
+       *   与「被看见了但没解锁」。这违反本文件 `:783-788` 自己写着的契约
+       *   （「记一行失败。这是'不许静默失效'的**唯一出口**」）。
+       *   实测：欠账被**兄弟会话**（同工程根 ⇒ 同一个 `rootKey`）抢先 `delete` 掉之后，
+       *   那个会话自己后面几次写交接件时 `delete` 一律返回 false ⇒ 账本里一行都不落。
+       *   ⚠ `pendingHit` 必须**在 delete 之前**取：它记的是"这次写之前 pending 里有没有这笔账"。
+       * ⚠ 这一行能被记下来的前提是去重键认得它 ⇒ 见 `logRow`（缺陷 B 的 `rootKey`）。
+       */
+      logRow(state, {
+        at: new Date().toISOString(), ev: 'handover-write-seen', sid: sid, turn: turn,
+        path: abs, rootKey: rootKey, resolvedPath: resolvedPath,
+        pendingHit: !!state.pending.get(rootKey),
+      }, deps)
       // ★ 写闸的**唯一**解锁方式：把**那一份**交接真的有内容地写下去
       if (state.pending.delete(rootKey)) {
         logRow(state, { at: new Date().toISOString(), ev: 'write-gate-cleared', sid: sid, turn: turn, handover: abs }, deps)

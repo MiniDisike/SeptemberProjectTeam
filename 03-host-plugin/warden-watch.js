@@ -25,7 +25,7 @@
  */
 const ROOT = process.env.WARDEN_ROOT || process.cwd()
 
-const VERSION = '1.0.2-driftheal'
+const VERSION = '1.0.3-apiadapt'
 // ⚠ plugin-io.js 与它**放在同一个目录**（本包已带上它）—— 脑子A/B 都指出：
 //   原来它没随包发布，于是 CMD 指向一个不存在的文件 ⇒ 常驻插件那条刷新线是死的。
 const CMD = 'node ' + require('path').join(__dirname, 'plugin-io.js').split(require('path').sep).join('/')
@@ -474,10 +474,23 @@ module.exports = {
        *   现在先探测：`shell.run` / `shell.resolve` 不在就记 `api-degraded` 并跳过
        *   turn 线 —— 不再让整个 refresh 崩掉；`guardCheck` 的 fs 自愈巡检不经过
        *   shell，照跑（这就是 drift-heal「零 shell 依赖」的意义）。
+       * ★ 2026-10-01：**适配新 API**（`@deepseek-ai/dsh-pwsh-local` 的
+       *   `PwshLocalExecutor`，即现在注册为 `ctx.shell` 的实现）：
+       *   `run` 改名 `execute` —— `execute(spec)` 返回 promise → 执行句柄，
+       *   `await 句柄.result()` 得最终结果（`dsh-tool-pwsh:652-655` 的官方范式）；
+       *   `resolve(request)` **还在**、参数语义不变（`command` 必需，
+       *   `workdir`/`timeoutMs`/`stdoutMaxBytes` 可选，`onExpiry` 缺省 `"kill"`
+       *   —— 超时 kill 并以 timedOut 结果 resolve，不 reject）；结果
+       *   `stdout.text`/`stderr.text`/`exitCode` 形态与旧版一致 ⇒ 下面的解析不动。
+       *   探测改成**新旧双兼容**：`execute` 在走新线、`run` 在走旧线，
+       *   两个都不在才记 `api-degraded`（下次 DSH 再改 API 也是优雅降级，不再崩）。
        */
-      if (!shell || typeof shell.run !== 'function' || typeof shell.resolve !== 'function') {
+      const hasResolve = !!shell && typeof shell.resolve === 'function'
+      const useExecute = hasResolve && typeof shell.execute === 'function'
+      const useLegacyRun = !useExecute && hasResolve && typeof shell.run === 'function'
+      if (!useExecute && !useLegacyRun) {
         watchLog({ at: new Date().toISOString(), ev: 'api-degraded', trigger: trigger, turn: turn,
-          why: 'shell.run/resolve 不可用（DSH 升级后 API 变了）—— turn 账本检查线跳过；fs 自愈巡检不受影响',
+          why: 'shell.execute/run 均不可用（DSH 升级后 API 变了）—— turn 账本检查线跳过；fs 自愈巡检不受影响',
           shellType: typeof shell,
           shellKeys: shell ? Object.keys(shell).slice(0, 15).join(',') : String(shell) })
         return
@@ -497,9 +510,7 @@ module.exports = {
        * 现在：所有可能含空白/引号/元字符的参数一律用 **单引号包裹**（`'` → `''`，pwsh 的转义法）。
        */
       const q = (v) => "'" + String(v).replace(/'/g, "''") + "'"
-      Promise.resolve().then(function () {
-        return shell.run(shell.resolve({
-          command: CMD + ' ' + q(trigger) + ' ' + String(turn || 0) + ' ' + q('plugin')
+      const argvCmd = CMD + ' ' + q(trigger) + ' ' + String(turn || 0) + ' ' + q('plugin')
             + ' ' + q('-')          // owner：常驻版认不出会话（没有卡片上报那条路）
             + ' ' + q('-')          // ownerSource
             + ' ' + String(runs)    // agentEvents/runs
@@ -521,11 +532,22 @@ module.exports = {
             //   病根：plugin-io.js 的 ROOT 原来硬编码成**作者机的一个固定盘** ⇒ 用户在别的盘干活，
             //   插件读写的却是那本账（屏幕上显示另一个项目的账）。见 plugin-io.js 顶部那段注释。
             //   取 `agent.session.header.cwd`（官方 hooks-codex:146 读的就是这个字段）。
-            + ' ' + q(sessionCwd || ROOT),
+            + ' ' + q(sessionCwd || ROOT)
+      Promise.resolve().then(function () {
+        const request = shell.resolve({
+          command: argvCmd,
           workdir: ROOT,
           timeoutMs: 60000,
           stdoutMaxBytes: 2097152,
-        }))
+        })
+        /**
+         * ★ 2026-10-01 适配新 API：`execute(spec)` 返回 promise → 执行句柄，
+         *   `await 句柄.result()` 得最终结果（`dsh-tool-pwsh:652-655` 的官方范式）；
+         *   旧 `run(request)` 直接返回结果。两种返回的
+         *   `stdout.text`/`stderr.text`/`exitCode` 形态一致 ⇒ 下面的解析不动。
+         */
+        if (useExecute) return shell.execute(request).then(function (h) { return h.result() })
+        return shell.run(request)
       }).then(function (res) {
         const text = String((res.stdout && res.stdout.text) || '')
         const errText = String((res.stderr && res.stderr.text) || '')
@@ -549,7 +571,7 @@ module.exports = {
         fails += 1
         /**
          * ★ 原来这里只有 `console.error` —— 等于**没记**。现在把原样的错误写进可查的落盘文件：
-         *   这一行就是判"到底是 shell.run 挂了、还是插件没被调到"的唯一证据。
+         *   这一行就是判"到底是 shell.execute/run 挂了、还是插件没被调到"的唯一证据。
          */
         watchLog({ at: new Date().toISOString(), ev: 'run-threw', trigger: trigger, turn: turn, sid: sid,
           durationMs: Date.now() - t0, fails: fails,
