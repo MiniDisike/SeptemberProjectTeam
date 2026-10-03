@@ -18,7 +18,78 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
-/** js-yaml 从 DSH 的 profile 里借（本目录没有 node_modules）——**运行时推导，不写死机器路径** */
+/** 只读 asar 目录头，列出 `innerPrefix` 下的条目（**不落盘**，用来当探针）。 */
+function asarEntriesUnder(asarPath, innerPrefix) {
+  const fd = fs.openSync(asarPath, 'r')
+  const head = Buffer.alloc(16)
+  fs.readSync(fd, head, 0, 16, 0)
+  const jsonLen = head.readUInt32LE(12)
+  const jsonBuf = Buffer.alloc(jsonLen)
+  fs.readSync(fd, jsonBuf, 0, jsonLen, 16)
+  const header = JSON.parse(jsonBuf.toString('utf8'))
+  const dataOffset = 16 + jsonLen
+  fs.closeSync(fd)
+
+  const files = []
+  const walk = (node, prefix) => {
+    for (const [name, entry] of Object.entries(node.files ?? {})) {
+      const full = prefix ? `${prefix}/${name}` : name
+      if (entry.files) walk(entry, full)
+      else if (full.startsWith(innerPrefix)) files.push({ full, entry })
+    }
+  }
+  walk(header, '')
+  return { files, dataOffset }
+}
+
+function extractFromAsar(asarPath, innerPrefix, destRoot) {
+  const { files, dataOffset } = asarEntriesUnder(asarPath, innerPrefix)
+  if (!files.length) return null
+
+  const out = fs.openSync(asarPath, 'r')
+  try {
+    for (const { full, entry } of files) {
+      const rel = full.slice(innerPrefix.length).replace(/^\//, '')
+      if (!rel) continue
+      const target = path.join(destRoot, rel)
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      const buf = Buffer.alloc(Number(entry.size))
+      fs.readSync(out, buf, 0, Number(entry.size), dataOffset + Number(entry.offset))
+      fs.writeFileSync(target, buf)
+    }
+  } finally { fs.closeSync(out) }
+  return destRoot
+}
+
+function findDshAsar() {
+  const inner = 'dsh/node_modules/js-yaml/'
+  const bases = [...new Set([process.env.LOCALAPPDATA, path.join(os.homedir(), 'AppData', 'Local')].filter(Boolean))]
+  const found = []
+  for (const base of bases) {
+    const programs = path.join(base, 'Programs')
+    if (!fs.existsSync(programs)) continue
+    for (const name of fs.readdirSync(programs)) {
+      const p = path.join(programs, name, 'resources', 'app.asar')
+      if (fs.existsSync(p)) found.push({ dir: name, p })
+    }
+  }
+  found.sort((a, b) => (/(deepseek|^dsh)/i.test(b.dir) ? 1 : 0) - (/(deepseek|^dsh)/i.test(a.dir) ? 1 : 0))
+  for (const f of found) {
+    // 同目录下可能装着别的 Electron 应用 ⇒ 先用"里面真有 js-yaml"筛一遍
+    try { if (asarEntriesUnder(f.p, inner).files.length) return f.p } catch { /* 换下一个 */ }
+  }
+  return null
+}
+
+/**
+ * js-yaml —— **运行时推导，不写死机器路径**。
+ *
+ * ⚠ 2026-10-03 修：原来只试 `~/.dsh/profiles/node_modules/js-yaml` 和裸 `require('js-yaml')`。
+ *   两条路在**新电脑上都不存在** —— profile 目录压根没有 node_modules，
+ *   于是本自检永远 exit 2（"没查成"）。而 DSH 自己是带 js-yaml 的，只是它在
+ *   `app.asar` 里（不在 `app.asar.unpacked`），普通 `require` 进不去。
+ *   ⇒ 借不到就从 asar 里**取出来**再 require（只取本包自己，不动 DSH）。
+ */
 function loadYaml() {
   const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
   const candidates = [
@@ -27,6 +98,14 @@ function loadYaml() {
   ]
   for (const c of candidates) {
     try { return require(c) } catch { /* 换下一个 */ }
+  }
+  const asar = findDshAsar()
+  if (asar) {
+    const dest = path.join(os.tmpdir(), `tw-jsyaml-${process.pid}`)
+    fs.rmSync(dest, { recursive: true, force: true })
+    try {
+      if (extractFromAsar(asar, 'dsh/node_modules/js-yaml/', dest)) return require(path.join(dest, 'index.js'))
+    } catch { /* 落到下面的报错 */ } finally { fs.rmSync(dest, { recursive: true, force: true }) }
   }
   return null
 }
@@ -39,7 +118,8 @@ function check(label, condition, detail = '') {
 
 const yaml = loadYaml()
 if (yaml === null) {
-  console.log('✗ 找不到 js-yaml（去 DSH profile 的 node_modules 借不到）—— 这一条是"没查成"，不是"没问题"')
+  console.log('✗ 找不到 js-yaml（既借不到 DSH profile 的 node_modules，也没能从 app.asar 里取出来）')
+  console.log('  这一条是"没查成"，不是"没问题"。装了 DSH 的机器上应该不会走到这里。')
   process.exit(2)
 }
 

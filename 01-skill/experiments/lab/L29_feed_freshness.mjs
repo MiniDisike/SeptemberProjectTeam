@@ -16,11 +16,19 @@
  *
  * 为什么能在本沙箱真跑：只读文件 + 纯比较，**不 spawn 子进程**。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const ROOT = '<WORKSPACE>';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const ROOT = process.env.WARDEN_ROOT || process.cwd();
 const STALE_MIN = 15;
 
 const rd = (p) => {
@@ -48,7 +56,7 @@ function ledgers() {
 export default async function run() {
   const c = makeCtx('L29', 'feed 跨账本且不落后于最新活动（I56 回归）');
 
-  const livePaths = [path.join(ROOT, '.warden', 'PLUGIN-LIVE.json'), '<HOME>\\DSH-Workspace\\task-warden\\PLUGIN-LIVE.json'];
+  const livePaths = [path.join(ROOT, '.warden', 'PLUGIN-LIVE.json'), path.join(pluginDir(), 'PLUGIN-LIVE.json')];
   let snap = null; let snapPath = '';
   for (const p of livePaths) {
     try { snap = JSON.parse(fs.readFileSync(p, 'utf8')); snapPath = p; break } catch { /* 换下一个 */ }
@@ -59,6 +67,16 @@ export default async function run() {
   }
   const feed = Array.isArray(snap.feed) ? snap.feed : [];
   c.check('① 快照存在且带 feed（为 0 不许报成功）', feed.length > 0, `${snapPath}  feed=${feed.length}`);
+
+  // ── 本机修订：补上本用例自己声明的规则 ──
+  //   上一行已经判了"feed 为 0 不许报成功"，但代码没有在 feed 为空时收手，
+  //   下面第 82 行 `feed[feed.length - 1].at` 直接解引用空数组 ⇒ 抛
+  //   "Cannot read properties of undefined"，把"如实判失败"变成"崩在断言之前"。
+  //   （作者环境里 feed 非空，所以这条路径从没被走过。）
+  if (feed.length === 0) {
+    c.skip('②③④ 新鲜度与跨账本覆盖', 'feed 为 0 —— 没有可比对的产出，不许拿它断言');
+    return finish(c);
+  }
 
   const ageMin = (Date.now() - (Date.parse(String(snap.atIso || '')) || 0)) / 60000;
   if (!(ageMin <= STALE_MIN)) {

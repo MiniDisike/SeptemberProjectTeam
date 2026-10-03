@@ -15,12 +15,19 @@
  *   ③ 负控：**只有自己**在某个 ref 下有发现（没有可比对象）⇒ 不许报；
  *   ④ 说明：它是**代理**判据（文字不像 ≠ 观点真独立），输出里必须带这句免责。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
 
 function mkLedger(name, { rounds, votes, findings }) {
   const dir = path.join(os.tmpdir(), 'L27_' + name, '.warden');

@@ -16,11 +16,20 @@
  *
  * 全部在内存里造 rounds 喂 `check(root, {rounds})`，**不写任何账本、不 spawn 子进程**。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
-const ROOT = '<WORKSPACE>\\task-warden';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
+const ROOT = projectRoot();
 const BAD = '跨窗口污染';   // R15「不要」里的一条（实读自 SPEC）
 
 export default async function run() {

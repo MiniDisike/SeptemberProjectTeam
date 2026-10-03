@@ -21,12 +21,19 @@
  *   ③ 负控：**只交代了一部分** ⇒ 仍硬失败（不许"交代一条算全交代"）；
  *   ④ 负控：**没有「不要」**的需求标 done ⇒ 不受这条影响（防误伤）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
 
 function mkLedger(name, { spec, rounds }) {
   const root = path.join(os.tmpdir(), 'L34_' + name);

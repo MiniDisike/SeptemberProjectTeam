@@ -85,7 +85,15 @@ const MIRROR_NEED = [
     console.error('  DSH_HOME = ' + JSON.stringify(home))
     console.error('  缺: ' + JSON.stringify(missing))
     console.error('  跑法：')
-    console.error("    $env:DSH_HOME='<WORKSPACE>\\task-warden\\.warden\\patches\\P-M26\\work\\mirror-dsh-home'; node " + path.resolve(process.argv[1]))
+    // ⚠ 2026-10-03：原来这里直接印一个写死路径 + `<WORKSPACE>` 占位符
+    //   （里面还带着作者自己的工程内部分支名 `.warden\patches\P-M26\…`）。
+    //   公开版里那串东西在别人机器上**根本不存在**，照着抄只会白折腾。
+    //   ⇒ 改成**推导**：DSH_HOME 只需要含下面那四样，装过的人通常就是 DSH 家目录本身。
+    const guess = process.env.DSH_HOME_GUESS || path.join(os.homedir(), '.dsh')
+    console.error('    DSH_HOME 要指向一个**含 `skills/task-warden` 与 `experiments/lab`** 的目录。')
+    console.error('    装过本包的话，通常就是 DSH 的家目录本身：')
+    console.error("      $env:DSH_HOME='" + guess + "'; node " + path.resolve(process.argv[1]))
+    console.error('    （上面那行是**猜的**——本机没有的话，按同样的结构自己建一个镜像目录。）')
     process.exit(2)
   }
   console.log('[门槛] DSH_HOME 镜像 OK = ' + home + '（四样齐全）')

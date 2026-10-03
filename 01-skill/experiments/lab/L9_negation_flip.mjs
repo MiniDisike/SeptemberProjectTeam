@@ -17,9 +17,17 @@
  *
  * 检测器自带负控：逐字相同、非否定词改动、整段重写 → 都必须判**不是**翻转。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { writeUtf8, makeCtx } from './common.mjs';
+
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
 
 // ------------------------------------------------------------------ 检测器
 const NEG_TOKENS = ['不只在', '不再', '不能', '不会', '不许', '不要', '没有', '无法', '并非', '不是', '不用', '不', '没', '未', '无', '别'];
@@ -139,7 +147,7 @@ const docRewritten = [
 
 export default async function run() {
   const c = makeCtx('L9', '否定词翻转：缺陷被写成没问题');
-  const sbDir = '<WORKSPACE>\\_lab\\L9_negation_flip';
+  const sbDir = path.join(os.tmpdir(), '_lab', 'L9_negation_flip');
   fs.mkdirSync(sbDir, { recursive: true });
   writeUtf8(path.join(sbDir, '诊断-原文.md'), docOriginal);
   writeUtf8(path.join(sbDir, 'ARCH-v4-节选.md'), docRewritten);
@@ -188,7 +196,9 @@ export default async function run() {
     bigRewrite.flipped === false, `flipped=${bigRewrite.flipped}；${bigRewrite.reason}`);
 
   // ---------- 真实事故在磁盘上有据（读活跃目录，只读）
-  const evidenceFile = '<WORKSPACE>\\.warden\\<缺陷清单>.md';
+  // 原字面量的文件名本身也被脱敏过（<缺陷清单>.md 不存在）；指到本工程的 SPEC.md，
+  // 缺失时如实报"没找到"，而不是崩在 mkdir 上
+  const evidenceFile = path.join(process.env.WARDEN_ROOT || process.cwd(), '.warden', 'SPEC.md');
   if (fs.existsSync(evidenceFile)) {
     const txt = fs.readFileSync(evidenceFile, 'utf8').replace(/\*\*/g, '');
     const hit = txt.includes('WASD 飞行只在漫游') && txt.includes('WASD 飞行不只在漫游');

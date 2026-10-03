@@ -1,2 +1,22 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# 全部按 LF 检出。
+#
+# ⚠ 为什么必须写 eol=lf（2026-10-02 实测踩出来的）：
+#   只写 `* text=auto` 时，Windows 上 `core.autocrlf=true` 会把工作区检出成 **CRLF**，
+#   于是 `MANIFEST.json` 里的 sha256 **一个都对不上** —— INSTALL.md 第 9 步
+#   「校验备份完整性」在每台新 Windows 上都是红的（实测 101 个文件里 95 个不符），
+#   而包本身没坏。`eol=lf` 把它钉死在仓库里定的那个形态。
+#
+# ⚠ 另外：BOM 同样会让 `MANIFEST.json` 对不上，而且后果严重得多 ——
+#   包根 `package.json` 带 UTF-8 BOM 时，DSH 的 peer-deps 校验 `JSON.parse` 失败，
+#   **每一行插件都被标成 "disabling profile plugin row"**，静默不加载。
+#   git 不会凭空加 BOM，但历史里那个 BOM 会跟着文件一直走。
+#   ⇒ `node install.mjs --refresh-manifest` 每次都会把 BOM/CRLF 归一化后再算 sha256。
+
+* text=auto eol=lf
+
+# 这几个是机器/本机专属产物，不该进仓库
+install-out/    export-ignore
+plugin/         export-ignore
+preset-roles/   export-ignore
+_probe/         export-ignore
+交接.md          export-ignore

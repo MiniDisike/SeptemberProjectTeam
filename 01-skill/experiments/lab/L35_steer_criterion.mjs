@@ -12,12 +12,20 @@
  * ★ 夹具**全部取自真实产物**（`PLUGIN-LIVE.json` 实读 + 插件源码实读），
  *   不是我假设的形状 —— 这正是「审查」点名的教训：「自检夹具必须喂真实产物」。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const PLUGIN = '<WORKSPACE>\\task-warden\\plugin\\warden-watch.js';
-const IO = '<WORKSPACE>\\task-warden\\plugin\\plugin-io.js';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const PLUGIN = path.join(pluginDir(), 'warden-watch.js');
+const IO = path.join(pluginDir(), 'plugin-io.js');
 
 function finish(c) {
   const ok = c.checks.every((x) => x.ok);
@@ -67,8 +75,8 @@ export default async function run() {
 
   // ── ③ 真实快照：reqCount 真的在里面吗 ─────────────────────────────────────
   const livePaths = [
-    '<HOME>\\DSH-Workspace\\.warden\\PLUGIN-LIVE.json',
-    '<WORKSPACE>\\.warden\\PLUGIN-LIVE.json',
+    path.join(process.env.WARDEN_ROOT || process.cwd(), '.warden', 'PLUGIN-LIVE.json'),
+    path.join(projectRoot(), '.warden', 'PLUGIN-LIVE.json'),
   ];
   const snaps = [];
   for (const p of livePaths) {

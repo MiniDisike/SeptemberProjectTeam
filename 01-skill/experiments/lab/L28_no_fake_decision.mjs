@@ -15,11 +15,20 @@
  *   ② 正控：真账本当前的偏差单 ⇒ **不许**出现这类失败（防误伤）；
  *   ③ 负控：把「用户决定」改成「待定」⇒ **不许**被判伪造（还没定夺不等于伪造）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
-const ROOT = '<WORKSPACE>\\task-warden';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
+const ROOT = projectRoot();
 
 const FAKE_DECISION = '我同意改用独立数据窗口，这样更方便';
 

@@ -17,15 +17,24 @@
  *   ② **反例必须被判无效**：`session-aaa10000`（早于 mtime）**不许**被算成有效见证；
  *   ③ 时间比较必须认**两种**写法（毫秒时间戳与 ISO 串）—— 这就是我踩的第②个坑。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { makeCtx } from './common.mjs';
 
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
 const NEEDLE = '状态类问题要一句话直接答';
-const PRESET = '<HOME>\\.dsh\\.agent-presets\\roles\\agent.cordis.yml';
+// 旧路径 $DSH_HOME/.agent-presets/ 在当前 DSH 版本已废弃；改指本包那份同格式的 preset 源文件
+const PRESET = path.join(projectRoot(), 'preset-roles', 'agent.cordis.yml');
 const OLD_WINDOW = 'session-aaa10000';
-const SESS_ROOT = '<HOME>\\.dsh\\sessions';
+const SESS_ROOT = path.join(os.homedir(), '.dsh', 'sessions');
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
 /** `at` 可能是毫秒时间戳、也可能是 ISO 串 —— 两种都要认（v3 只认字符串，结论全反） */

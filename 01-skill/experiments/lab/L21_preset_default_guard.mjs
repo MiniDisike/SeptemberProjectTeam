@@ -19,7 +19,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { makeCtx } from './common.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const GUARD = path.join(HERE, '..', '..', 'plugin', 'preset-default-guard.mjs');
+// ── 运行时推导（本机修订）──
+//   原写法 path.join(HERE, '..', '..', 'plugin', …) 把插件目录假定成 skill 的同级，
+//   公开包发布时它与本 skill 不在同一棵树 ⇒ 这条前置永远失败。
+//   改为运行时定位，可用 WARDEN_PLUGIN_DIR 覆盖；刻意不写死本机绝对路径。
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR
+  || path.join(process.env.USERPROFILE || process.env.HOME || '', 'task-warden', 'plugin');
+const GUARD = path.join(pluginDir(), 'preset-default-guard.mjs');
 
 export default async function run() {
   const c = makeCtx('L21', '自动启用不许被改掉：preset 默认值守卫');

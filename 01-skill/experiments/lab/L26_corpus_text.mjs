@@ -21,10 +21,19 @@
  *   ④ 若本次扫到的语料里有**带反斜杠**的用户消息，那一条必须能在 `corpusText` 里**逐字命中**
  *      （这正是 I54 的直接回归；扫不到就如实 SKIP，不许假装通过）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
+import os from 'node:os';
+import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
-const ROOT = '<WORKSPACE>\\task-warden';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
+const ROOT = projectRoot();
 
 export default async function run() {
   const c = makeCtx('L26', '语料存正文：带 Windows 路径的原话必须能逐字命中');

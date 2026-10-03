@@ -1,17 +1,17 @@
 {
   "name": "SeptemberProjectTeam / task-warden (public edition)",
-  "date": "2026-09-30",
-  "note": "Public edition. Machine-specific paths and the author's verbatim quotes are redacted; all paths are derived at runtime. Hashes are computed over LF-normalized text. Regenerate with the private publish/make-public.mjs, which also re-runs the leak scan.",
+  "date": "2026-10-03",
+  "note": "Public edition. Machine-specific paths are derived at runtime by install.mjs; none are baked in. Hashes are computed over LF-normalized, BOM-stripped text — run `node install.mjs --refresh-manifest` after editing any shipped file.",
   "files": [
     {
       "rel": ".gitattributes",
-      "size": 66,
-      "sha256": "1a1dbe176bc233b499d35a57db7513f2941c99ab9759f177830c9149be99005b"
+      "size": 1172,
+      "sha256": "666dfcc1bf8b5f7a7bf35ef3dff2ef3129b07a46fc8dabe39935213eaef74c9e"
     },
     {
       "rel": ".gitignore",
-      "size": 1647,
-      "sha256": "2cbac3d3b84404cc128739996f40589429b67fc6918f379427fee1cdd635d1bf"
+      "size": 2756,
+      "sha256": "07e165e92d95a97853052a9f87e55d05103f603d2556c34b6c015c751e46856e"
     },
     {
       "rel": "01-skill/README-安装说明.md",
@@ -35,8 +35,8 @@
     },
     {
       "rel": "01-skill/brain-policy.test.mjs",
-      "size": 6948,
-      "sha256": "f13ac411af54660dbaa1e69e801fdacfd6c99580a4a0fe888c9852b0672a8270"
+      "size": 7641,
+      "sha256": "05121e42873f5300638273d5fa775063df653aad209398611d9338bf3c460a95"
     },
     {
       "rel": "01-skill/context-audit.mjs",
@@ -105,8 +105,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L21_preset_default_guard.mjs",
-      "size": 8669,
-      "sha256": "261e145992c6647dc5d1af9b0e4517df86f9a3d8d52342960c6e891970094053"
+      "size": 9142,
+      "sha256": "45b3c905f3fa788a0eba40d66171ffaf97a8f497bb4031becea376d9e766ef6e"
     },
     {
       "rel": "01-skill/experiments/lab/L22_plan_gate.mjs",
@@ -115,13 +115,13 @@
     },
     {
       "rel": "01-skill/experiments/lab/L23_roles_criteria.mjs",
-      "size": 7838,
-      "sha256": "51fde574084334aa1df2d526f173575c71b9935df76588fc11511eac729e3362"
+      "size": 8350,
+      "sha256": "e7f46f7ad405c254aa645f96ae948d4e35589cb9c81bec603745489688ca66b1"
     },
     {
       "rel": "01-skill/experiments/lab/L24_duty_loop.mjs",
-      "size": 7540,
-      "sha256": "84ed8c6c36b640933e7701b41722b9cdc0c984e7b1a421a71446e88a99ec0611"
+      "size": 8052,
+      "sha256": "3a903750c35781f85c2bdd4e0b9284cfdf9d2332f3cf58c7cce816bc6fb0c046"
     },
     {
       "rel": "01-skill/experiments/lab/L25_copy_sync.mjs",
@@ -130,23 +130,23 @@
     },
     {
       "rel": "01-skill/experiments/lab/L26_corpus_text.mjs",
-      "size": 4904,
-      "sha256": "f9dea97356a6abd2a16dc76d2298e42050fd672b582052d19d2204206bc1c57c"
+      "size": 5459,
+      "sha256": "3b2fbbe2ae945b8660f09f20b499c1c13c50e7e8b31a84882838c628e0249f3b"
     },
     {
       "rel": "01-skill/experiments/lab/L27_finding_isomorphism.mjs",
-      "size": 5729,
-      "sha256": "b703d3820131423bbe6ce3ac3199de5ceafae29e45d536d3bb0005bd70abad79"
+      "size": 6241,
+      "sha256": "e654c6b88b136303e88e2c479295ce2f5b953a4f8c8d0beec3979842dbed2f1e"
     },
     {
       "rel": "01-skill/experiments/lab/L28_no_fake_decision.mjs",
-      "size": 4168,
-      "sha256": "5499d21adeb53625532f4a7260bb80bf32ac0341172019be5b2c6fbc6d044a8c"
+      "size": 4723,
+      "sha256": "dbbd69bf32b02dff262ec1970b17ce0a30d5ec0f03ee7db70d9fef764d0ee05a"
     },
     {
       "rel": "01-skill/experiments/lab/L29_feed_freshness.mjs",
-      "size": 6692,
-      "sha256": "dc380b04d97e206e7d18f8d88f671370cdd695fd9f0dd135ec399135b57a083f"
+      "size": 7855,
+      "sha256": "760de8383cf1fc22f0300ad36b5be36a5713a2a794a39e3b1224291e1d8fd5b4"
     },
     {
       "rel": "01-skill/experiments/lab/L2_half_done.mjs",
@@ -155,38 +155,38 @@
     },
     {
       "rel": "01-skill/experiments/lab/L30_negation_matcher.mjs",
-      "size": 8368,
-      "sha256": "f4e439ca65a119476ce6d965d2c9ee74b52ddb86217b94b49e1ac361f42cd8fc"
+      "size": 8923,
+      "sha256": "ffa95c93cf830b7674823722c3a0171879221b58d1e487fc2f77224d14519476"
     },
     {
       "rel": "01-skill/experiments/lab/L31_evidence_after_mtime.mjs",
-      "size": 6047,
-      "sha256": "c656cdda3f540ee161ed0bec2933dfd4ba462953569171f53a7fcccbb148ff9c"
+      "size": 6730,
+      "sha256": "63aad740c823cc57946d64ebcb9d43f00930f4292d36bc0fde8c130d58b531fe"
     },
     {
       "rel": "01-skill/experiments/lab/L32_delegation.mjs",
-      "size": 3985,
-      "sha256": "40892a6190a88c70e6cce411dd12ccb545e2be9a25c7b6180a53e09bf7c085e8"
+      "size": 3983,
+      "sha256": "76fe107d86391ca5bc83d07fda79e14ffb94dd8ec41df2bed194abdc6663a99c"
     },
     {
       "rel": "01-skill/experiments/lab/L33_recon_enforced.mjs",
-      "size": 4873,
-      "sha256": "0532eceff675955c204e55933fb21a0cd0636e3e01e92a00e6ef025e728691fb"
+      "size": 5385,
+      "sha256": "3bbe0c8f9a4dc0a30a20431bf6116d4dbee9f06eedf1427bd57ae2e18c4a0f15"
     },
     {
       "rel": "01-skill/experiments/lab/L34_mustnot_addressed.mjs",
-      "size": 5843,
-      "sha256": "b165b4d3c75774ca99655d78b4776b531c442af64a48b9ee85d7daeaf2ab6884"
+      "size": 6355,
+      "sha256": "9bab85e54d2507cdee1d2a2959b0eba7e4d244e19be34b205b4b65570d40c5a6"
     },
     {
       "rel": "01-skill/experiments/lab/L35_steer_criterion.mjs",
-      "size": 6350,
-      "sha256": "b28294e0df18c56a053521111aca8a61348210811ae23d7af8cb93446ca02104"
+      "size": 6917,
+      "sha256": "02264014417765a36b9aa839e1b7eb1ba8509c7400f54b8d8c9972b916d506ae"
     },
     {
       "rel": "01-skill/experiments/lab/L36_steer_mode.mjs",
-      "size": 4506,
-      "sha256": "e5baf35f80dbb3310fd104fc0b61190612774a3634a0738b5895dcd4c491cca4"
+      "size": 5010,
+      "sha256": "a0765ca8b34f6b77d2dcb8f9cd72d1dd3a0f315a7f9dc608f3d0df3a29ce0a56"
     },
     {
       "rel": "01-skill/experiments/lab/L37_patch_pipeline.mjs",
@@ -200,8 +200,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L39_autonomy_switch.mjs",
-      "size": 131,
-      "sha256": "fad6bea3741562d10612430e37ff7867de65b9758591b9435d31848ac548b86e"
+      "size": 128,
+      "sha256": "6269542beb0d6c3c9a629b20384fe77a6575fa4c5835adad7a003a7a834187a5"
     },
     {
       "rel": "01-skill/experiments/lab/L3_isolation.mjs",
@@ -210,8 +210,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L40_visible_speech.mjs",
-      "size": 126,
-      "sha256": "7f4521f9ecb0d0ed85203e7afd097aa124ca4d77d4167384db60cebc3dbdbbd1"
+      "size": 123,
+      "sha256": "51e23360fc31664169d803694b8af12e3f4a928b8885fc687b740ba2a76afb9d"
     },
     {
       "rel": "01-skill/experiments/lab/L41_pipe_round2.mjs",
@@ -222,6 +222,16 @@
       "rel": "01-skill/experiments/lab/L42_window_scope.mjs",
       "size": 28710,
       "sha256": "078c968bb91568b53ea0fc3f77eeabe36107b4756bfd11e454ca21d7a31beb89"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L46_handover_date_prefix.mjs",
+      "size": 26402,
+      "sha256": "fa7b0e0a20b2a98fabaa797af5e42cb5d0c07629fdc4686f00c98363768b9a57"
+    },
+    {
+      "rel": "01-skill/experiments/lab/L47_handover_ledger_evidence.mjs",
+      "size": 35778,
+      "sha256": "0d5103cf26bb64335e9f835544071ec0c2bb755b7ea134d0cd007b9f6f86d265"
     },
     {
       "rel": "01-skill/experiments/lab/L4_frozen_baseline.mjs",
@@ -250,8 +260,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L9_negation_flip.mjs",
-      "size": 10490,
-      "sha256": "47435bdc4a7b7a532e6a91af58040904b811ca3cf9853fa9829ad6a67d119feb"
+      "size": 11254,
+      "sha256": "d1ea66a33e8c4ea1deab0f8675501f894ea146c7c4abc3474ab5b84ac00b76ac"
     },
     {
       "rel": "01-skill/experiments/lab/README.md",
@@ -265,13 +275,13 @@
     },
     {
       "rel": "01-skill/experiments/lab/run-all.mjs",
-      "size": 12450,
-      "sha256": "d2afaeca6fff0bcb76d32c974e5f10c06f3f91d8cca6dc0f504b4affe518d1b4"
+      "size": 15191,
+      "sha256": "cbb2bbd76fa2fa09f1f96b8bc4b8d5ef99a4003ebd6d2b645b991e493a268738"
     },
     {
       "rel": "01-skill/selftest.mjs",
-      "size": 98767,
-      "sha256": "d2169ab94feb8a50163335edd91fd7088ab3fce3864bb8ab846037b089f31ad8"
+      "size": 99417,
+      "sha256": "25a89450e2dd664fd9534330c533ad19ae0010d653f06684b6715d9f64630ba8"
     },
     {
       "rel": "01-skill/warden.mjs",
@@ -285,13 +295,13 @@
     },
     {
       "rel": "02-preset-roles/agent.cordis.yml",
-      "size": 23785,
-      "sha256": "fd46d82023ba524bc980ef88905c9cc42839b726681fa4febf36a9423b7e3e2e"
+      "size": 24594,
+      "sha256": "e2052ca2c270d06b48dbaef19e6b9cd584970a1727643980407223e20044dc86"
     },
     {
       "rel": "02-preset-roles/preset-selftest.mjs",
-      "size": 9776,
-      "sha256": "b2b56c316ed9976e9b372f0792e74676de5da2daee3678e3d73faf8432ad72c1"
+      "size": 13116,
+      "sha256": "3863a6bf7afe06a230baa133938dc201d8d9f6c269b8e75ca649e5f6ff1099d6"
     },
     {
       "rel": "02-preset-roles/preset.yml",
@@ -354,11 +364,6 @@
       "sha256": "48884a73c4c30f2115c227c5a824a63b2f5584679265222dca1e7ec44f8d2b39"
     },
     {
-      "rel": "03-host-plugin/context-dedup.status.json",
-      "size": 1328,
-      "sha256": "c7955deb6b6ecd2e442069ac7e9639bdc7dc6e59de7d894110271c160390875d"
-    },
-    {
       "rel": "03-host-plugin/drift-heal.mjs",
       "size": 23020,
       "sha256": "f9397d04c8f36a35b673984483b39b9c0e5470abe952104dfea5fb64aafb1e9a"
@@ -380,23 +385,13 @@
     },
     {
       "rel": "03-host-plugin/handover-gate.js",
-      "size": 169372,
-      "sha256": "4b332c194c6c1cfd19852cea90d6222a2c7b2099846a54607d200d4a844a8936"
-    },
-    {
-      "rel": "03-host-plugin/handover-gate.js.bak-before-orphanfix-20260926",
-      "size": 127533,
-      "sha256": "1954740d7396ef6eab971ef45525efca99c233fb9a19286d8730f0b62e14923e"
+      "size": 175528,
+      "sha256": "c528c6619fd6b1aa16f84852f791b01405b1d2bc799efa55f04dd3f5ca64b446"
     },
     {
       "rel": "03-host-plugin/handover-gate.selftest.mjs",
       "size": 78675,
       "sha256": "91d3aba18ca0091796cb716a7dcf65f7c66fdcefa0038f497a96e6b03dafe5ea"
-    },
-    {
-      "rel": "03-host-plugin/handover-gate.selftest.mjs.bak-before-orphanfix-20260926",
-      "size": 75170,
-      "sha256": "9196b02bf1a474518f76c6a88628263f4870031cad08b663fbbb4c3e017933f4"
     },
     {
       "rel": "03-host-plugin/plugin-io.js",
@@ -420,8 +415,8 @@
     },
     {
       "rel": "03-host-plugin/report-spill.selftest.mjs",
-      "size": 85152,
-      "sha256": "3286357778a27e2684dbe60b62905e4fdee25d594576571be2f9fcb1d0d459d4"
+      "size": 85913,
+      "sha256": "f46a037600979ad6338a69eb450ee1ef87db3933d407a291aaf5a2bcb7e93662"
     },
     {
       "rel": "03-host-plugin/role-voices.DESIGN.md",
@@ -440,13 +435,13 @@
     },
     {
       "rel": "03-host-plugin/warden-watch.js",
-      "size": 55417,
-      "sha256": "43f6b834bcd16088395a99eafa7b4b84c15c0e901f15ae4534ce5ae68448b3c2"
+      "size": 57057,
+      "sha256": "bed085de6747e48e3bcdf634c0f169f18fdfc9279d461ac7b96456e18548d2fb"
     },
     {
       "rel": "04-config/cordis.patch.yml",
-      "size": 1448,
-      "sha256": "04d8063e1821d7f2f904af8e5ca44eb65f6ca33b097060f36bf31bc81e3bc36c"
+      "size": 3586,
+      "sha256": "4c7d515e7edcd03572ed6d88d83641d4582764e257da2be1fa48b3e5991a7207"
     },
     {
       "rel": "04-config/settings-片段.yaml",
@@ -459,19 +454,9 @@
       "sha256": "9faa3ebcdf8749603edcdd95a10a68ea0ac2efedd8a5b1d3efe77955e4879017"
     },
     {
-      "rel": "HANDOFF.md",
-      "size": 6332,
-      "sha256": "dc297efe37202536de618ca5caaad6b4ed193f868201937429dacaf260bbe8d0"
-    },
-    {
       "rel": "INSTALL.md",
-      "size": 26640,
-      "sha256": "083507ac800c1dcddf426607630c098e23c4d19e7d12946ee67b75879bac625c"
-    },
-    {
-      "rel": "INSTALL.md.bak-before-fix-20260925",
-      "size": 13145,
-      "sha256": "a436cb06d70b1f282f3729fe62e78e6b05e6f0489dd91e4ecb610826ce77619f"
+      "size": 26272,
+      "sha256": "f88512b6b57429c7ed2bc12ab24fa34b03677e139782846753ab5cb6f296afe3"
     },
     {
       "rel": "LICENSE",
@@ -480,8 +465,8 @@
     },
     {
       "rel": "README.md",
-      "size": 22802,
-      "sha256": "7021e80719403b41513f8a06e1500aa0d08c491c39f648bc37a50c6a2b350322"
+      "size": 24488,
+      "sha256": "5d6612ac83cc379383765eb2effd5221ca05ab828cd2524efd6d9b9e272ba078"
     },
     {
       "rel": "THIRD-PARTY-NOTICES.md",
@@ -494,19 +479,14 @@
       "sha256": "fdfd07158228946619fa89857d5ef85e2d370bd9d915c5da74e72350154b1cbd"
     },
     {
+      "rel": "install.mjs",
+      "size": 55636,
+      "sha256": "bb32b47fd5e6c4d0a41c57f9eb03b67c50f0eaaa8d4431df15bd16aadc9ba6f5"
+    },
+    {
       "rel": "package.json",
-      "size": 243,
-      "sha256": "6804f5d1e1eb09c97d3f81a1ed29615184e1c975b282acfa9312cc6f417194f7"
-    },
-    {
-      "rel": "package.json.bak-before-typefix",
-      "size": 263,
-      "sha256": "fc7e1080ce69c1821d40b1b2dbf2f9e2194a7b1d8ac174f5fde45306584e12a9"
-    },
-    {
-      "rel": "交接.md",
-      "size": 2684,
-      "sha256": "40c5fbc375e06860d459119709aaf62d287b0fb9a93d951cb986bc4258aa2512"
+      "size": 240,
+      "sha256": "b7c1aa7ced12e312b489209fc4f1f245f7da02d33c1220b2812027dbcba78c5b"
     }
   ]
 }

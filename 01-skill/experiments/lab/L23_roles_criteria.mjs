@@ -21,12 +21,19 @@
  *   ④ 全席停摆（窗口内 0 产出）⇒ 报"全线停摆"，**不许**印成"N/M 有效"；
  *   ⑤ 那一行必须带**见证数据**（窗口轮数 / 新议题数 / 计分席位数）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
 
 function mkLedger(name, { rounds, votes, findings }) {
   const dir = path.join(os.tmpdir(), 'L23_' + name, '.warden');

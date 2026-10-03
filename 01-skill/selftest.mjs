@@ -1121,11 +1121,19 @@ cases.push({
     return { ok: r.code === 0 && need4 && ran.code === 0, detail: `exit=${r.code} 四段齐=${need4} 任务书里那条命令 exit=${ran.code}` };
   },
 });
+// ⚠ 2026-10-03 修一条**过时用例**：负控原来拿「审查」当"不存在的角色"，
+//   但它现在是 ROLE_REGISTRY 里真真实实的一席（证据审查员）⇒ 闸门**正确地放行**，
+//   而用例把它判成"漏放"。这属于上游用例过时，不是安装坏了。
+//   ⇒ 这里从注册表**反推**一个保证不存在的名字，用例再也不会因为加了新角色而过时。
+const KNOWN_ROLE_IDS = new Set(ROLE_REGISTRY.map((r) => r.id));
+const NOT_A_ROLE = ['不存在的角色', '__no_such_role__', '资料员长', '审查员二审']
+  .find((n) => !KNOWN_ROLE_IDS.has(n)) ?? '__no_such_role__';
+
 cases.push({
   name: '59 role brief 角色名不存在 / 没说要问什么 → exit 2', why: '派发口不许瞎派：没有角色卡或没说清要问什么，就不给任务书', expect: 'exit2', kind: 'neg',
   fn: () => {
     if (!SC.ok) return 0;
-    const a = lab.runWarden(SC.sb.dir, ['role', 'brief', '--role', '审查', '--question', 'x']).code;
+    const a = lab.runWarden(SC.sb.dir, ['role', 'brief', '--role', NOT_A_ROLE, '--question', 'x']).code;
     const b = lab.runWarden(SC.sb.dir, ['role', 'brief', '--role', '资料员']).code;
     return a === 2 && b === 2 ? 2 : 0;   // 两个都得拒；有一个放过就判失败
   },

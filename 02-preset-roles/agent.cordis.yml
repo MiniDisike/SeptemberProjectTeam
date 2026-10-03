@@ -344,8 +344,18 @@
         backgroundMode: one-shot
         maxDepth: provider-managed
 
+    # ⚠ 2026-10-02 实测修正：这个包在当前 DSH 里**已经不存在**。
+    #   装机包 `dsh/node_modules/@deepseek-ai/` 下只有 `dsh-workflow` 与 `dsh-workflow-ptc`，
+    #   没有 `dsh-workflow-worker-thread`。
+    #   后果不是"这一行不干活"，而是 `agent-preset-registry` 的 `auditRows()` 把它算成
+    #   **failed 行** ⇒ preset `roles` 的 broken 非空 ⇒ **GUI 直接拒绝「新建会话」**。
+    #   ⇒ 必须 `disabled: true`（`auditRows` 里 `if (entry.disabled) continue;`）。
+    #   别删这两行、也别改包名：删了会让 `tool-workflow` 失去 worker 来源；
+    #   改包名则指向一个根本不存在的东西。
+    #   恢复条件：该包重新随 DSH 发布时，删掉下面这行 `disabled: true`。
     - id: workflow-worker-thread
       name: '@deepseek-ai/dsh-workflow-worker-thread'
+      disabled: true
       config:
         provider: spawn
 

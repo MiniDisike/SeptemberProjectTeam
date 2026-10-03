@@ -9,12 +9,19 @@
  *   ⇒ 本用例把它落成文件，并且**从插件源码里实读** `steerMode` 的逻辑来跑，
  *     不是我在用例里另抄一份（抄的那份和跑的那份不一致 = 又一个"夹具复刻错误假设"）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { makeCtx } from './common.mjs';
 
-const PLUGIN = '<WORKSPACE>\\task-warden\\plugin\\warden-watch.js';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const PLUGIN = path.join(pluginDir(), 'warden-watch.js');
 
 /** 照 `steerMode` 的**实际语义**判：默认 off；只有显式 mode==='on' 才是 on */
 function steerModeLike(src, root) {

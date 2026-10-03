@@ -24,6 +24,7 @@ node_modules/
 .codeartsdoer/
 *-debug.jsonl
 warden-watch-debug.jsonl
+team-guard-probe.jsonl
 # 散落的一次性文件（2026-09-25 加）
 #   用户逐字：「不要删除，不推送它们」⇒ 留在本地、挡住 `git add .`，但不进版本库。
 #   · _tmp_*.mjs   = 别的会话留下的一次性探针（解 zip / 搜字符串），含本机绝对路径
@@ -37,5 +38,23 @@ HANDOFF.md
 
 # 插件运行时写出来的探针/状态文件（不是包内容）
 context-dedup.status.json
+team-guard-probe.jsonl
+# 本机文件指纹缓存（2026-10-03 移出版本库）：只有 sha256 与**修改时间戳**，
+#   没有任何代码引用它，录的还是"我什么时候改过哪些文件" —— 公开仓库里没道理带这个。
+.merkle-snapshot.json
+
+# ── install.mjs 的本机产物（2026-10-03 加）────────────────────────────
+# 这三样都是**按本机路径生成**的，装一次就重建一次。
+# 进版本库只会让下一个人拿到一份指向别人电脑的路径 ——
+# `.agent-presets/` 与 `settings.yaml` 时代就是这么翻车的（见 INSTALL.md 第 3 节）。
+#   plugin/       = 6 个宿主插件的安装副本（profile 的 insert 行指向这里）
+#   preset-roles/ = 02-preset-roles 的安装副本（preset 的 team-guard 行指向这里）
+#   install-out/  = 生成的 patch 层 + 启动日志 + dump-config 日志
+# 源文件永远是 01-skill/ 02-preset-roles/ 03-host-plugin/ 那三份，MANIFEST 只算它们。
+/plugin/
+/preset-roles/
+/install-out/
+/_probe/
+
 /交接.md
 /交接-*.md

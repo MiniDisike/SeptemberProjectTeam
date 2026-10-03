@@ -20,7 +20,7 @@
  */
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
 
 const call = (name, args) => ({ type: 'tool/call', data: { name, arguments: JSON.stringify(args || {}) } });
 

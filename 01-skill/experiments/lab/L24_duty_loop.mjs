@@ -17,12 +17,19 @@
  *   ④ 没派活 + 0 产出 ⇒ **不许**报「派了活没干」（没活干不许判）；
  *   ⑤ 派活条数要进那一行的**见证数据**（`派活 N 条`）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
 
 function mkLedger(name, { rounds, votes, findings, duties }) {
   const dir = path.join(os.tmpdir(), 'L24_' + name, '.warden');

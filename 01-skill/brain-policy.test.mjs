@@ -75,7 +75,14 @@ console.log('\n== 4. 默认（1 个脑子）是正常态，不是欠账')
 const rec1 = cli(['brain', 'record', '--artifact', '.warden/ARCH.md', '--brain', 'A', '--verdict', 'accept', '--issues', ''])
 check('记第 1 个脑子成功', rec1.code === 0, rec1.out.slice(0, 200))
 check('状态里是「单审」', rec1.out.includes('单审'))
-check('单审说明是"默认就是 1 个"', rec1.out.includes('默认就是 1 个'))
+// ⚠ 2026-10-03 修三条**过时断言**。
+//   用例还在按 2026-09-2x 的措辞断言「默认就是 1 个」/「默认只派 1 个脑子」，
+//   而用户 2026-09-25 逐字把政策改成了「写完代码复查不应该那么久」——
+//   **默认不派脑子**，只在 conflict / shallow / explore 成立时才派（见 `warden.mjs`
+//   里 `brainStatus()` 的单审 note 与 `brain` 命令的扩编规则，两者都逐字写着）。
+//   ⇒ 断言改成盯**当前政策本身**，而不是盯一句已经作废的措辞；
+//     「单审不是欠账」这条不变，所以仍然不许它说"高风险产物要求 2 个"。
+check('单审说明是"按需派出，不是欠账"', rec1.out.includes('按需派出'))
 check('单审**不再**说"高风险产物要求 2 个"', !rec1.out.includes('高风险产物要求 2 个'))
 check('单审列出三种触发条件', rec1.out.includes('conflict') && rec1.out.includes('shallow') && rec1.out.includes('explore'))
 
@@ -90,14 +97,14 @@ check('第 1 条**没有** trigger 字段（派第 1 个时不该有）',
 console.log('\n== 5. brain 状态页的扩编说明已改成新政策')
 const st = cli(['brain'])
 check('状态页退出 0', st.code === 0, String(st.code))
-check('写明"默认只派 1 个"', st.out.includes('默认只派 1 个'))
+check('写明"默认不派脑子"（用户 2026-09-25：默认不审）', st.out.includes('默认不派脑子'))
 check('写明三种触发条件', st.out.includes('conflict') && st.out.includes('shallow') && st.out.includes('explore'))
 check('不再写"高风险产物…要 2 个脑子"', !st.out.includes('要 2 个脑子'))
 
 console.log('\n== 6. help 里有脑子这一段（原来 HELP 完全没有 brain）')
 const help = cli(['help'])
 check('help 里有 brain brief', help.out.includes('brain brief'))
-check('help 里写明默认 1 个', help.out.includes('默认只派 1 个脑子'))
+check('help 里写明默认不派脑子', help.out.includes('默认不派脑子'))
 check('help 里有 brain audit', help.out.includes('brain audit'))
 
 console.log('\n== 7. 空台账时不许报"审过了"')

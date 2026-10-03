@@ -184,7 +184,27 @@
 
 ## 安装
 
-见 **[INSTALL.md](INSTALL.md)**（中英双语：装到哪、只改哪两处配置、四条自检、四个实测踩过的坑）。
+```sh
+git clone https://github.com/MiniDisike/SeptemberProjectTeam.git
+cd SeptemberProjectTeam
+node install.mjs
+```
+
+装完**重启 DSH**、**新开一个窗口**。细节见 **[INSTALL.md](INSTALL.md)**（中英双语）。
+`install.mjs` 自带 `--dry-run` / `--check` / `--verify-boot` / `--selftest`，装完自己会体检。
+
+## 贡献 / 发布
+
+```sh
+node preflight.mjs              # 能不能发：有没有绑本机路径、有没有夹带隐私
+node install.mjs --repo-only    # 改了文件后：去 BOM/CRLF + 重算 MANIFEST（不往机器上装）
+```
+
+`preflight.mjs` 是公有化的守门人，查写死的本机路径、凭据、个人邮箱、
+不该进库的文件（`.warden/`、`install-out/`、交接文件、调试日志）、
+以及 BOM/CRLF 这两个"静默把插件废掉"的老坑。退出码即结论。
+
+> ⚠ 它**只**能证明"可移植 + 干净"。装得上装不上是另一回事，要跑 `node install.mjs --verify-boot`。
 
 ## 建议
 因为有资料员的查询角色存在，会经常进行搜索，建议给Agent的搜索任务安装免费的搜索插件或API。
@@ -375,7 +395,29 @@ Not relying on "reminding the AI to be self-disciplined," but on mechanical devi
 
 ## Installation
 
-See **[INSTALL.md](INSTALL.md)** (bilingual Chinese-English: where to install, exactly which two configuration changes to make, four self-checks, four pitfalls actually encountered).
+```sh
+git clone https://github.com/MiniDisike/SeptemberProjectTeam.git
+cd SeptemberProjectTeam
+node install.mjs
+```
+
+Then **restart DSH** and **open a new window**. Details in **[INSTALL.md](INSTALL.md)** (bilingual).
+`install.mjs` ships `--dry-run` / `--check` / `--verify-boot` / `--selftest` and self-checks after installing.
+
+## Contributing / Releasing
+
+```sh
+node preflight.mjs              # shippable? no baked-in machine paths, no leaked personal data
+node install.mjs --repo-only    # after editing: strip BOM/CRLF + recompute MANIFEST (installs nothing)
+```
+
+`preflight.mjs` is the gate for making this package public: it looks for hard-coded local paths,
+credentials, personal e-mail addresses, files that must never be committed (`.warden/`,
+`install-out/`, handover notes, debug logs), and for the BOM/CRLF pair that silently disables
+every plugin. Exit code is the verdict.
+
+> ⚠ It proves "portable + clean" and nothing more. Whether it *installs* is a separate question —
+> run `node install.mjs --verify-boot` for that.
 
 ## Suggestion
 

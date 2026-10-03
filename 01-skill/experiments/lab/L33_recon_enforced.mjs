@@ -15,12 +15,19 @@
  *   ② 有 done 轮次、RECON 里的 results 覆盖到它 ⇒ **不再因此失败**（正控）；
  *   ③ results 只覆盖到更早的轮次（done 在它之后）⇒ **仍然硬失败**（不许被"跑过一次"糊弄）。
  */
+// ── 运行时推导（本机修订，替换公开包里未展开的 <WORKSPACE> / <HOME> 占位符）──
+//    刻意**不写死本机绝对路径**：写死 = 换台机器又变回"静默不加载"。
+//    可用环境变量覆盖：WARDEN_ROOT（工程根）、WARDEN_PLUGIN_DIR（插件目录）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeCtx } from './common.mjs';
 
-const WARDEN = 'file:///<HOME>/.dsh/skills/task-warden/warden.mjs';
+const pluginDir = () => process.env.WARDEN_PLUGIN_DIR || path.join(os.homedir(), 'task-warden', 'plugin');
+const projectRoot = () => process.env.WARDEN_ROOT || path.join(os.homedir(), 'task-warden');
+
+
+const WARDEN = new URL('../../warden.mjs', import.meta.url).href;
 
 function mkLedger(name, { rounds, recon }) {
   const root = path.join(os.tmpdir(), 'L33_' + name);

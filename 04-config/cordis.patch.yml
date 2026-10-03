@@ -1,17 +1,54 @@
-# Your patch layer for this dsh profile, applied after every bundle layer:
-# a top-level YAML array of loader patch entries (id-targeted config
-# overrides, disables, and insert lists; `!!js` expressions allowed).
-# 常驻插件：task-warden 的「监督员」Host 半边（蓝屏/重启后自动加载）
-# 为什么不用动态包：动态 Cordis 包天生不落盘（dsh-cordis-host-runner\README.md:12）
-# 去掉下面 insert 那两行就能停掉它；改动前的备份在同目录 cordis.patch.yml.bak-before-warden
-# ⚠ 2026-09-17 实测结论（别重复踩）：**`patchReload: live` 不会重载模块代码。**
-#   实验：改了这个文件之后，等 8 秒看 `warden-watch.js` 的探针 `plugin-live` ——
-#   服务器进程（pid 11724）**没有**重新出现 ⇒ 模块被 Node 的 require 缓存住了。
-#   ⇒ **改了 `warden-watch.js` / `gate.mjs` 的代码，必须重启 DSH 才生效**；
-#     改这个 patch 文件本身（增删 insert 行）是 live 的，但那只影响"挂哪些插件"，不影响"插件的代码是哪个版本"。
-- insert:
-    - id: warden-watch
-      name: <WORKSPACE>/task-warden/plugin/warden-watch.js
-    # ⚠ 公开版删掉了第二行 insert（原来指向另一个私有插件的路径）——
-    #   那个插件**不在本包里**，照抄会把公开用户的 DSH 装坏（指向不存在的路径）。
-    #   那是作者自己项目的东西，与本工具无关。
+# ⚠ 这不是"照抄一下就能用"的配置模板 —— **别手抄**。
+#
+# 这一段原来是这么写的（公开包里的坑）：
+#
+#     - id: warden-watch
+#       name: <WORKSPACE>/task-warden/plugin/warden-watch.js
+#
+# `<WORKSPACE>` 看着像个路径，其实不是：DSH 解析不了它，会当成**相对路径**去找，
+# 结果是插件**静默不加载**（只在日志里打一行 `disabling profile plugin row`）。
+# 新的电脑上"照着改一遍路径"这件事，已经由 `node install.mjs` 整个接管了：
+# 它按你机器上的真实位置生成 `install-out/all.patch.yml`，
+# 并把同样的内容以**托管块**的形式写进 `~/.dsh/profiles/<profile>/cordis.patch.yml`。
+#
+# 所以这个目录现在只留两样东西：
+#   ① 挂载点长什么样（给人看，给 `install.mjs` 的生成结果对照）
+#   ② 装完之后会发生什么（哪些插件会拦你）
+#
+# 挂载点（`install.mjs` 生成的实际形状 —— 绝对路径一律写成 file:// URL）：
+#
+#     - insert:
+#         - id: warden-watch
+#           name: 'file:///C:/your/path/task-warden/plugin/warden-watch.js'
+#         …（6 个：warden-watch / context-dedup / role-voices /
+#             handover-gate / branch-guard / report-spill）
+#
+# 为什么用 `file:///` 而不是裸绝对路径（`app-boot/lib/index.js:3537-3545`）：
+#   `anchorInsertedPluginNames()` 只把 **patch 的 `insert` 直属行**（以及 `cordis:group`
+#   的 `config`）里的相对/绝对路径转成 `file://` URL；
+#   **它不看 `config.plugins` 里嵌套的 name**。
+#   ⇒ 顶层插件行两种写法都能过，但 `team-guard.mjs` 在 `config.plugins` 里，
+#     **必须**自己写死 `file:///` URL，否则 `import()` 收到裸 Windows 绝对路径
+#     会报 `ERR_UNSUPPORTED_ESM_URL_SCHEME`。这也是 `install.mjs` 统一写 URL 的原因。
+#
+# 装上之后你会感觉到什么（第 3 条最要紧）：
+#   ① warden-watch   —— 只提醒，不拦：新窗口没有账本时推一行提示（每会话一次）。
+#   ② context-dedup / report-spill / role-voices —— 不拦任何操作：
+#        · context-dedup 只对"够大的工具结果"做去重，省上下文；
+#        · report-spill 把长报告正文落盘，上下文只留头尾 + 路径（落盘失败 ⇒ 原样放行）；
+#        · role-voices 把角色原话归档到 `<工程根>\角色发言\`，不进上下文。
+#   ③ handover-gate  —— **它会拒绝改文件**：在**有 `.git` 但没有 `交接.md`** 的目录里，
+#        改盘类工具（write/edit/shell）会被直接 deny（它自认是 fail-closed 设计）。
+#        要关掉它：删掉托管块里 handover-gate 那两行；或设 `WARDEN_HANDOVER_STEER=off`
+#        （后者只关"收尾提醒"，不关 deny）。
+#   ④ branch-guard   —— **没有 `.warden` 账本时它是惰性的**（三条前置判据全部 allow）；
+#        只在工程里存在支线账本、且支线失衡时才 deny。
+#
+# ⚠ 改插件 `.js` 的代码**必须重启 DSH**：`patchReload: live` 只重载"挂哪些插件"，
+#   不重载模块代码（Node 的 require 缓存）。增删 insert 行是 live 的。
+#
+# 末尾这个 `[]` 是**故意留的**：本文件其实不参与加载（真配置由 install.mjs 写进
+# profile），但万一有人 `--patch` 指到它，`app-boot/lib/index.js:3566` 要求
+# 「must be a top-level YAML array」—— **空文件或只有注释会解析成 null 并直接 throw**。
+# `[]` 是合法数组，指向它最坏也就是什么都不加。
+[]
