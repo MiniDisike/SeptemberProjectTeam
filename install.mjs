@@ -924,12 +924,21 @@ function doCheck({ dshHome, profile, patchFile, skillDir, pluginDir, presetDir, 
   // c. 插件文件在
   if (!opts.noPlugins) {
     const miss = PLUGIN_IDS.filter((id) => !exists(path.join(pluginDir, `${id}.js`)));
-    if (miss.length) note(`宿主插件缺 ${miss.length} 个：${miss.join(', ')}`);
-    else log(`      ✓ 6 个宿主插件在 ${pluginDir}`);
+    // ⚠ 2026-10-03：全新克隆里 `plugin/` **本来就不存在**（它是安装产物，不是仓库内容）。
+    //   原来一律报"缺 6 个"，在 `git clone` 完第一次跑 --check 的新用户看来像是包坏了 ——
+    //   而那其实是**还没装**这个正常状态。区分这两种情况，报错的含义完全不同。
+    if (miss.length && !exists(pluginDir)) {
+      log(`      · 还没装过：${pluginDir} 不存在（全新克隆的正常状态）—— 直接跑 node install.mjs`);
+    } else if (miss.length) {
+      note(`宿主插件缺 ${miss.length} 个：${miss.join(', ')}`);
+    } else {
+      log(`      ✓ 6 个宿主插件在 ${pluginDir}`);
+    }
   }
   // d. team-guard 在（preset 引用它）
   if (!opts.noPreset && !exists(path.join(presetDir, 'team-guard.mjs'))) {
-    note(`team-guard.mjs 不在 ${presetDir} —— preset 会挂不上`);
+    if (!exists(presetDir)) log(`      · 还没装过：${presetDir} 不存在（全新克隆的正常状态）—— 直接跑 node install.mjs`);
+    else note(`team-guard.mjs 不在 ${presetDir} —— preset 会挂不上`);
   }
   // e. 包根 package.json 无 BOM
   const pkgJson = path.join(HERE, 'package.json');

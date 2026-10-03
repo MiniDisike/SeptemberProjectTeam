@@ -480,8 +480,8 @@
     },
     {
       "rel": "install.mjs",
-      "size": 55636,
-      "sha256": "bb32b47fd5e6c4d0a41c57f9eb03b67c50f0eaaa8d4431df15bd16aadc9ba6f5"
+      "size": 56346,
+      "sha256": "abe522b92d3ffdd978f9cebf04fde144b5e208c57c0d478c65ffaefa345534bb"
     },
     {
       "rel": "package.json",
