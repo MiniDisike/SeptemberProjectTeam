@@ -295,8 +295,13 @@
     },
     {
       "rel": "02-preset-roles/agent.cordis.yml",
-      "size": 24594,
-      "sha256": "e2052ca2c270d06b48dbaef19e6b9cd584970a1727643980407223e20044dc86"
+      "size": 25481,
+      "sha256": "12184e6c22d356faafc7702cd46db493fe479719297dee254c9d85d7ab0683d8"
+    },
+    {
+      "rel": "02-preset-roles/preset-inject-selftest.mjs",
+      "size": 8989,
+      "sha256": "c0d069836794c6dc29c7d69f2d99cc795641ad2cd2d3010c057575fe090d1bcb"
     },
     {
       "rel": "02-preset-roles/preset-selftest.mjs",
@@ -480,8 +485,8 @@
     },
     {
       "rel": "install.mjs",
-      "size": 56346,
-      "sha256": "abe522b92d3ffdd978f9cebf04fde144b5e208c57c0d478c65ffaefa345534bb"
+      "size": 56649,
+      "sha256": "97d7c5fb52b00b536953f7c67f25368f6bebe854829cbf6f807692b6e69179c2"
     },
     {
       "rel": "package.json",

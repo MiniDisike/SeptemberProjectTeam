@@ -1025,6 +1025,9 @@ async function runSelftests({ skillDir, pluginDir, presetDir }) {
     ['preset 默认守卫', path.join(pluginDir, 'preset-default-guard.mjs'), ['--selftest']],
     ['加载确证脚本', path.join(pluginDir, 'check-plugins-loaded.selftest.mjs'), []],
     ['preset 形状', path.join(presetDir, 'preset-selftest.mjs'), []],
+    // ⚠ 这一条守的是 **GUI 里红色「加载失败」且建不了会话**，而 boot 验不出来：
+    //   `diagnostic()` 是惰性的，只有 GUI 列 preset / 建会话时才求值。
+    ['preset 行未丢（GUI 加载失败）', path.join(presetDir, 'preset-inject-selftest.mjs'), []],
     ['角色协议加固', path.join(presetDir, 'team-guard.selftest.mjs'), []],
   ];
   log(`\n[7/7] 跑 ${suite.length} 个自检（会比较慢）`);

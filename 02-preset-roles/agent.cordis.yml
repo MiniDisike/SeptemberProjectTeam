@@ -359,6 +359,18 @@
       config:
         provider: spawn
 
+    # ⚠ 2026-10-03 实测修正（GUI 报「九月项目团 · 加载失败」，且建不了会话）：
+    #   **`workflow-ptc` 是 `workflowEngine` 服务的唯一提供者，而这一行之前被误删了。**
+    #   少了它，下面 `tool-workflow` 与 `tool-ralph` 两行 inject 的 `workflowEngine`
+    #   永远拿不到 ⇒ `auditRows()` 把它们算进 **pending** ⇒
+    #   而 `diagnostic()` 返回的是 `[...failed, ...pending]`，
+    #   **pending 一样会让 GUI 显示「加载失败」**。
+    #   ⚠ 这类故障没有任何日志、boot 也不报错：`--verify-boot` 全绿，
+    #     因为 `diagnostic()` 是**惰性**的，只有 GUI 列 preset / 建会话时才求值。
+    #   ⇒ 由 `preset-inject-selftest.mjs` 守住（它拿 DSH 自带 `standard` 当基准做差集）。
+    - id: workflow-ptc
+      name: '@deepseek-ai/dsh-workflow-ptc'
+
     - id: tool-workflow
       name: '@deepseek-ai/dsh-tool-workflow'
 
