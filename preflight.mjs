@@ -41,10 +41,29 @@ const WIN_USER = `${String.fromCharCode(67)}:${BS}Users${BS}`
 const WIN_USER_F = `${String.fromCharCode(67)}:/Users/`
 const WIN_PROGS = `${String.fromCharCode(67)}:${BS}Program Files`
 
+/**
+ * ⚠ 把一段**普通字符串**变成正则源，必须先把反斜杠转义（`\` → `\\`）。
+ *   不转的话 `C:\Users\` 里的 `\U` 会被正则当成"转义 U"（在非 unicode 模式下
+ *   等价于字母 U），于是 `\Users` 变成 `Users`，整条规则**永远匹配不到任何东西** ——
+ *   而且它**不报错**，只是静悄悄地一条都抓不到。
+ *   这不是假设：本工具第一版就是这么写的，
+ *   结果所有基于 `\` 的家目录规则全是摆设（`/` 写法的那条没事，因为没有反斜杠）。
+ *   ⇒ 下面统一走 `re()`，不许再直接 `new RegExp(带反斜杠的字符串)`。
+ */
+function re(src, flags = 'g') { return new RegExp(src.replace(/\\/g, '\\\\'), flags) }
+
 const PORTABILITY_RULES = [
-  { id: '写死本机家目录', re: new RegExp(WIN_USER + '[A-Za-z0-9_.-]+', 'g'), why: '写死了某个人的用户名目录，别人机器上根本不存在' },
-  { id: '写死本机家目录·斜杠', re: new RegExp(WIN_USER_F + '[A-Za-z0-9_.-]+', 'g'), why: '同上（正斜杠写法）' },
-  { id: '写死程序目录', re: new RegExp(WIN_PROGS, 'g'), why: '写死了本机安装目录' },
+  { id: '写死本机家目录', re: re(WIN_USER + '[A-Za-z0-9_.-]+'), why: '写死了某个人的用户名目录，别人机器上根本不存在' },
+  { id: '写死本机家目录·斜杠', re: re(WIN_USER_F + '[A-Za-z0-9_.-]+'), why: '同上（正斜杠写法）' },
+  { id: '写死程序目录', re: re(WIN_PROGS), why: '写死了本机安装目录' },
+  // ⚠ 这一条是补上一个真实的漏网：只查 `C:\Users\...` 的话，
+  //   `F:\…\Documents\GitHub\<别人的工程名>\...` 会整个溜过去 ——
+  //   实测就抓到过一条（用户名被抹成 <USER> 了，可**盘符 + 目录结构 + 工程名**还在）。
+  //   ⇒ 判据不是"出现了盘符"，而是**盘符后面跟着个人目录或被打码的用户名**。
+  //     `D:\` / `D://x` 这类教学示例（讲反斜杠归一化要用）满仓库都是；
+  //     拦它们只会逼人把整条规则关掉 —— 那等于没写。
+  { id: '疑似本机真实路径', re: /\b[A-Za-z]:[\\/](?:Users[\\/]|<[A-Za-z_]+>[\\/]|(?:Documents|Desktop|Downloads|Pictures|Videos|Music)[\\/])/g, why: '盘符后面跟着个人目录或被打码的用户名 —— 这形状几乎都是某台真机的路径' },
+  { id: 'UNC 网络共享', re: /\\\\[A-Za-z0-9._-]+\\[A-Za-z0-9._$-]+\\/g, why: '写死了网络共享路径（多半带某个域/主机名）' },
   { id: '写死 mac 家目录', re: /\/Users\/[A-Za-z0-9_.-]{2,}/g, why: '写死了某个 macOS 用户的家目录' },
   { id: '写死 linux 家目录', re: /\/home\/[A-Za-z0-9_.-]{2,}/g, why: '写死了某个 Linux 用户的家目录' },
   { id: '环境变量展开符', re: /%(APPDATA|USERPROFILE|LOCALAPPDATA|HOMEDRIVE|HOMEPATH)%/g, why: '展开结果因机器而异，等于写死' },
@@ -65,8 +84,8 @@ const CODE_EXT = /\.(js|mjs|cjs|ts|mts|cts|ya?ml|json)$/i
  * ⚠ 逐条列出，不搞通配豁免：豁免一旦放开就变成藏污纳垢的后门。
  */
 const PORTABILITY_ALLOW = [
-  { re: new RegExp(WIN_USER + '<[a-z_-]+>', 'g'), why: '文档里的占位写法，不是真实路径' },
-  { re: new RegExp(WIN_USER + 'user', 'g'), why: '注释里举的反例（用通用名 user）' },
+  { re: re(WIN_USER + '<[a-z_-]+>'), why: '文档里的占位写法，不是真实路径' },
+  { re: re(WIN_USER + 'user'), why: '注释里举的反例（用通用名 user）' },
   { re: /\/home\/u\//g, why: 'selftest 夹具里的假家目录' },
   { re: /\/home\/user\b/g, why: 'selftest 夹具里的假家目录（Unix 分支判据要用）' },
   // ⚠ 按**文件**限定的豁免 —— 只放这一个文件里的这一种写法。
@@ -188,19 +207,23 @@ for (const rel of files) {
 
   const scan = (rules) => {
     for (const rule of rules) {
-      const re = new RegExp(rule.re.source, rule.re.flags)
+      const rx = new RegExp(rule.re.source, rule.re.flags)
       lines.forEach((line, i) => {
         // codeOnly 的规则：只在"会被解析的文件"里的"非注释行"上查。
         // 注释与 .md 文档**不会被 DSH 解析**，写在那儿是在留证据，不是缺陷。
         if (rule.codeOnly && (!CODE_EXT.test(rel) || isCommentLine(line))) return
-        re.lastIndex = 0
+        rx.lastIndex = 0
         let m
-        while ((m = re.exec(line)) !== null) {
-          const allowed = PORTABILITY_ALLOW.find((a) => (!a.files || a.files.test(rel))
-            && new RegExp(a.re.source, a.re.flags).test(m[0]))
+        while ((m = rx.exec(line)) !== null) {
+          // 豁免是拿**整行**去判，不是拿命中片段。
+  // ⚠ 为什么：规则命中的是最短片段（`C:\Users\`），而豁免项描述的是**整条路径的形状**
+  //   （`C:\Users\<user>\…`、`/home/user/…`）。拿片段判，豁免永远匹配不上 ——
+  //   实测就因此把两条占位写法误报成真机路径。
+  const allowed = PORTABILITY_ALLOW.find((a) => (!a.files || a.files.test(rel))
+            && new RegExp(a.re.source, a.re.flags).test(line))
           if (allowed) info(`${rule.id}（豁免：${allowed.why}）`, rel, i + 1, m[0])
           else hit(rule.id, rel, i + 1, m[0], rule.why)
-          if (m.index === re.lastIndex) re.lastIndex++   // 防零宽死循环
+          if (m.index === re.lastIndex) rx.lastIndex++   // 防零宽死循环
         }
       })
     }

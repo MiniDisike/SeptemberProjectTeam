@@ -285,8 +285,8 @@
     },
     {
       "rel": "01-skill/warden.mjs",
-      "size": 505418,
-      "sha256": "fe4029395370cee802077fc24989b6fccf4d587c493920fd9cf57bf08de5311e"
+      "size": 505528,
+      "sha256": "4bbfc5f4686288af86b10a8f6a90feecb5fc3ea1c662cbb2ae47de425bf6c983"
     },
     {
       "rel": "02-preset-roles/README.md",

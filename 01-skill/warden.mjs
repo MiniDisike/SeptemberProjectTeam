@@ -5396,8 +5396,9 @@ export function ruleDetail(root, id, { promote = false } = {}) {
  *   `handover-gate.js:1094` 的 `lastRoundOf()` 读的是 **`o.req`**，
  *   而 `warden.mjs record` 写进 `.warden/ROUNDS.jsonl` 的字段名是 **`requirement`**
  *   （`warden.mjs:5507` `requirement: req`）。实测：
- *     · 拿**真账本**（`F:\<USER>\Documents\GitHub\coco26\.warden\ROUNDS.jsonl`）喂它 ⇒
- *       返回 **`"? / partial"`** —— 需求号那一半**永远是 `?`**；
+ *     · 拿**真账本**喂它（一个**别的工程**的 `.warden/ROUNDS.jsonl`；
+ *       ⚠ 公开版不写具体路径 —— 盘符、目录结构、别人的工程名都不该进公共仓库）
+ *       ⇒ 返回 **`"? / partial"`** —— 需求号那一半**永远是 `?`**；
  *     · 手写一条 `{"req":"R10","status":"x"}` 它才认（而账本里**没有**这种行）。
  *   ⇒ 后果：**草稿里"本轮 record"那一行永远是 `? / <status>`，需求号丢了** ——
  *     而这一行正是"接手的人知道这轮在推进哪条需求"的唯一来源。
