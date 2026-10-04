@@ -127,6 +127,94 @@ const FORBIDDEN_FILES = [
   { re: /[\u4e00-\u9fa5]*\u4ea4\u63a5[\u4e00-\u9fa5]*\.md$/, why: '工程交接文件（含本机路径与过程留痕）' },
 ]
 
+/* ── 四、用户逐字原话：marker 与引文必须自洽 ─────────────────────────────
+ *
+ * ⚠ 这一节**独立成表 + 自己的循环**，故意不走上面那个 `scan()`：
+ *   `scan()` 内部只认 `PORTABILITY_ALLOW`。把本节挂进 `scan()` 再加一条按文件的豁免，
+ *   等于给那个文件**连同它整个目录**开遍私钥 / token / URL 凭据的后门 ——
+ *   与本文件第 84 行自己写的「豁免一旦放开就变成藏污纳垢的后门」直接冲突。
+ *   ⇒ 本节的豁免面**只有**下面那一个 `REDACTION_PLACEHOLDER`，没有第二条。
+ */
+
+/**
+ * R-窗口：**marker 在前、≥4 字的引文在后** —— 同一段里这一对不自洽 = 真泄漏。
+ *
+ * ⚠ 为什么判据是"自洽性"而不是"引号本身"：
+ *   实测"六字以上中文引号"在本仓命中 **3324 处**，绝大多数是 README 英文排版、
+ *   代码字符串、设计文档自述句 ⇒ 走裸引号会把规则淹死（逼人关规则 = 没写）。
+ * ⚠ 它抓的是这一类**实测存在、尚未修**的真泄漏：
+ *   `03-host-plugin/role-voices.js:472` 标了「出处已隐去」，
+ *   而 `:473` / `:474` 的字符串字面量里整段原话**一字不改还在**，**跨两个字面量**
+ *   ⇒ 任何按单行写的正则都抓不到它，**只有折叠后的单元级抓得到**。
+ *
+ * ⚠⚠ **本规则抓不到的（如实列在这里，别以为已经覆盖了）**：
+ *   ① `- 原话: <真原话>` 这种**不带引号的 SPEC 槽位** —— 为放过 lab 夹具**刻意不扫**，
+ *      这是**最大的已知漏**；R-核心那一轮才带归属词扫它。
+ *   ② marker 与引文相距 **>60 字符**，或中间**隔了一个空行**（空行断单元）。
+ *   ③ 引号内首尾带**全角空白**的变体（`^…$` 只吃 `\s`，但占位符夹带真话仍会被抓）。
+ *   ④ **marker 写在引文之后**（`用户报的：「…」——出处已隐去`）—— 本规则只认 marker 在前。
+ *   ⑤ **完全没有 marker、没有归属词**，只是字面碰巧重合的 —— **任何静态规则都抓不到**；
+ *      那种只能靠内容级比对（`--against <私有VOICE.jsonl>`，下一轮做）。
+ *   ⇒ 换句话说：**本规则只保证"标了隐去就真的隐去了"，不保证"整段原话一句都没漏"。**
+ */
+const VOICE_WINDOW_RULES = [
+  {
+    id: '用户逐字原话疑似未隐去',
+    re: /(?:已隐去|公开版已隐去)[\s\S]{0,60}?[「“"]([^」”"]{4,})[」”"]/g,
+    why: '这一段里既写了「已隐去」，又在 60 字内跟着 ≥4 字的引文 ⇒ 逐字原话还在公开版里',
+  },
+]
+
+/**
+ * 唯一的豁免面：引号**内整段**就是一个脱敏占位符（不按文件、不按行）。
+ *
+ * ⚠⚠ **这一条是被修正过的，别照抄回去**：任务书给的原文是
+ *   `(?:——|[-—–:：,，、]\s*公开版不留逐字)?`。那个写法在本仓**一个都匹配不上** ——
+ *   `——` 分支只吃掉破折号、把 `公开版不留逐字` 剩在外面；另一分支又要求 `，` 开头。
+ *   而本仓的标准隐去格式（`交接.md` §6 明写"沿用仓库既有隐去格式"）恰恰是
+ *   `（用户原话已隐去 —— 公开版不留逐字）` —— **破折号**和**那句短语同时在**。
+ *   实测：照原文写，豁免面命中数 **0**，而任务书自己的 T3 用例
+ *   （`用户原话：「（用户原话已隐去 —— 公开版不留逐字）」` ⇒ 期望 0）**必然变红**。
+ *   ⇒ 改成下面这个形状：破折号**与**分隔符**与**那句短语三者各自可缺席、但组合仍受限。
+ *
+ * ⚠ **修正没有放松"占位符里夹带真话"**：`^…$` 是**整段**锚定（不是子串匹配），
+ *   所以 `（用户原话已隐去 —— 公开版不留逐字）顺便把真话也说了` 照样在 `$` 处失败
+ *   （自检 T6 / T7 就是钉这一条），长度上限 40 只是第二道。
+ */
+const REDACTION_PLACEHOLDER =
+  /^\s*[（(【[]?\s*(?:用户原话|用户逐字|原话|出处|原文)?\s*(?:已隐去|已脱敏|已屏蔽)\s*(?:——\s*|[-—–:：,，、]\s*)?(?:公开版不留逐字)?\s*(?:公开版已隐去(?:原文|原话)?)?\s*[)）】\]]?$/
+/**
+ * 占位符长度上限（码点）。`^…$` 锚定**加上**这个上限 ⇒ 「占位符里夹带真话」过不去：
+ * 引号里只要除了占位符还有别的字，`$` 锚定先失败，长度只是第二道。
+ */
+const REDACTION_PLACEHOLDER_MAX = 40
+
+/**
+ * 把一行行折成「引文单元」：`- ` / `* ` / `1. ` 列表项与普通行各自开新单元；
+ * `^\s*[>|]` 的引用行、以及缩进 ≥2 的续行，接回上一行。
+ * ⚠ 折叠是能不能抓到 `role-voices.js:472-474` 那个洞的分水岭 —— **不许省**。
+ */
+function foldQuoteUnits(lines) {
+  const NEW_UNIT = /^\s{0,3}(?:[-*+]\s|\d+[.)]\s)/
+  const CONT = /^\s{2,}\S/
+  const QUOTE_LINE = /^\s*[>|]\s?/
+  const units = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const prev = units[units.length - 1]
+    if (prev && !NEW_UNIT.test(line) && (CONT.test(line) || QUOTE_LINE.test(line))) {
+      prev.lines.push(i + 1)
+      prev.text += '\n' + line
+    } else {
+      units.push({ start: i + 1, lines: [i + 1], text: line })
+    }
+  }
+  return units
+}
+
+/** 被认成占位符（而不是原话）的处数 —— 报出来是为了证明豁免面**真的被走过**，不是死代码。 */
+let voicePlaceholders = 0
+
 /* ────────────────────────────────────────────────────────── */
 
 const exists = (p) => { try { fs.accessSync(p); return true } catch { return false } }
@@ -236,6 +324,30 @@ for (const rel of files) {
       if (!EMAIL_ALLOW.test(m)) hit('疑似真实邮箱', rel, i + 1, m, '公开仓库里不该出现个人邮箱')
     }
   })
+
+  // ⚠ 第四节的**独立循环**：不共用 `scan()`，也不用 `PORTABILITY_ALLOW`
+  //   （那会把"按文件开豁免"这条后门引进 lab 整个目录，见本节开头的说明）。
+  //   先折成引文单元，再在**单元**上判 marker 与引文自不自洽。
+  for (const u of foldQuoteUnits(lines)) {
+    const last = u.lines[u.lines.length - 1]
+    const where = u.start === last ? `第 ${u.start} 行` : `第 ${u.start}–${last} 行`
+    for (const rule of VOICE_WINDOW_RULES) {
+      const rx = new RegExp(rule.re.source, rule.re.flags)
+      let m
+      while ((m = rx.exec(u.text)) !== null) {
+        if (m.index === rx.lastIndex) rx.lastIndex++          // 防零宽死循环
+        // 豁免拿**引号内整段**去判（= 捕获组 1），不按文件、不按行。
+        // ⚠ 注意**不是** `m[0]`：`m[0]` 从 marker 起算、含 marker 自己与那个开引号，
+        //   拿它去判等于"占位符前面只要有 marker 就不算占位符" ⇒ 豁免形同虚设。
+        const inner = m[1] ?? ''
+        if (inner.length <= REDACTION_PLACEHOLDER_MAX && REDACTION_PLACEHOLDER.test(inner)) {
+          voicePlaceholders++
+          continue
+        }
+        hit(rule.id, rel, u.start, `${where}｜${m[0]}`, rule.why)
+      }
+    }
+  }
 }
 
 // MANIFEST 完整性
@@ -263,6 +375,7 @@ if (!exists(manifest)) {
 /* ── 输出 ── */
 for (const f of infos.slice(0, 12)) console.log(`  · ${f.rule}  ${f.file}:${f.line}  ${f.text}`)
 if (infos.length > 12) console.log(`  · ……另有 ${infos.length - 12} 条豁免项未列出`)
+if (voicePlaceholders) console.log(`  · 另有 ${voicePlaceholders} 处引号里整段是「已隐去」占位符（已按豁免面放过，不算原话）`)
 
 if (!findings.length) {
   console.log(`\n  ✓ 扫了 ${scanned} 个文本文件：没有本机路径、没有凭据、没有不该进库的东西。`)
