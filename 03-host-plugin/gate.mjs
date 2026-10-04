@@ -158,7 +158,7 @@ export function judgeLedger(root, deps) {
         + ` 用户逐字说过这些是他不要的，而你标了 done 却没说清怎么避开的。${head}`
         + (miss.length > 6 ? `\n     …（还有 ${miss.length - 6} 条）` : '')
         + `\n  补法：node warden.mjs record --req <R#> --status done --avoided "不要项=怎么避开的" …`
-        + `\n  （来历：隔壁窗口把你的「我不要被锁定成平面」锁进了 SPEC、也跑了 check，然后交付了锁平面的东西 ——`
+        + `\n  （来历：隔壁窗口把你的「**不要被锁定成平面**」锁进了 SPEC、也跑了 check，然后交付了锁平面的东西 ——`
         + ` 旧判据拿整句自然语言去 includes 交付散文，永远不可能响。现在：**没交代过的「不要」不许交付**。）`,
     }
   }

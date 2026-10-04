@@ -10,8 +10,8 @@
     },
     {
       "rel": ".gitignore",
-      "size": 2756,
-      "sha256": "07e165e92d95a97853052a9f87e55d05103f603d2556c34b6c015c751e46856e"
+      "size": 3268,
+      "sha256": "2fb8338d48341591a543d574144b02164c2b4f073cf1089c653b8e90202a744c"
     },
     {
       "rel": "01-skill/README-安装说明.md",
@@ -20,8 +20,8 @@
     },
     {
       "rel": "01-skill/SKILL.md",
-      "size": 35195,
-      "sha256": "93d4d13ec4c945531d2c715f926151e797b2a0d6a7a48330ed811653c388b102"
+      "size": 35140,
+      "sha256": "d954915acf222c26fe6c78ebaeab984cdec2e6340043803121750d735ab28168"
     },
     {
       "rel": "01-skill/bill-compare.mjs",
@@ -105,8 +105,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L21_preset_default_guard.mjs",
-      "size": 9142,
-      "sha256": "45b3c905f3fa788a0eba40d66171ffaf97a8f497bb4031becea376d9e766ef6e"
+      "size": 9189,
+      "sha256": "d5552a268265e0faa114301f7f26b7a9d749695cd72edd056a9a60169ea51b7e"
     },
     {
       "rel": "01-skill/experiments/lab/L22_plan_gate.mjs",
@@ -280,13 +280,13 @@
     },
     {
       "rel": "01-skill/patch-pipeline.mjs",
-      "size": 125875,
-      "sha256": "d75031eec49ae438bf67d5e269fdb51dfad56cc2d7117822b215b252e6d12b1f"
+      "size": 125988,
+      "sha256": "cf4dd87f16514aa8a6c51826df8024e743bda4f163c1d3f767b27c0511376125"
     },
     {
       "rel": "01-skill/selftest.mjs",
-      "size": 99417,
-      "sha256": "25a89450e2dd664fd9534330c533ad19ae0010d653f06684b6715d9f64630ba8"
+      "size": 99448,
+      "sha256": "ca24ee7db884e9f07515b08c4273d231f7591370d0cbe2f3e774cc06b1cd6d3b"
     },
     {
       "rel": "01-skill/templates/params-示例.yml",
@@ -295,8 +295,8 @@
     },
     {
       "rel": "01-skill/warden.mjs",
-      "size": 505528,
-      "sha256": "4bbfc5f4686288af86b10a8f6a90feecb5fc3ea1c662cbb2ae47de425bf6c983"
+      "size": 505810,
+      "sha256": "303b62c8655e0ce9ddeb2bcfd4431bc75203b32d80b6f016dabed61daad4cff0"
     },
     {
       "rel": "02-preset-roles/README.md",
@@ -325,13 +325,13 @@
     },
     {
       "rel": "02-preset-roles/team-guard.mjs",
-      "size": 182893,
-      "sha256": "6e53c2ecd439fe7abde0aa8d3c617b3a933f28b5b622aa8797e383d32ae4500c"
+      "size": 182737,
+      "sha256": "e75b09dafd195b5afa000c3c068bb170de3c637602904fa6cafb129e0b519ac2"
     },
     {
       "rel": "02-preset-roles/team-guard.selftest.mjs",
-      "size": 52799,
-      "sha256": "d478da0d4481976c5288c33b6dc3c1e27a6ae1445f140fa6e57042ecf1c70136"
+      "size": 52854,
+      "sha256": "fe6e40de49f18d588de6be7b565db0f5f09bbb2d047af9eadde0dcca6fcade75"
     },
     {
       "rel": "03-host-plugin/RESTORE.md",
@@ -340,13 +340,13 @@
     },
     {
       "rel": "03-host-plugin/branch-guard.DESIGN.md",
-      "size": 52809,
-      "sha256": "e07b438a272cccde590ca99290f423e35cbc92e50123267a3ef43bb0ea2aa4f4"
+      "size": 52813,
+      "sha256": "838e85557f1f9fdf4b12f30e77770ac4e3a2c4eedbc55b59a1d390b9871e3822"
     },
     {
       "rel": "03-host-plugin/branch-guard.js",
-      "size": 70591,
-      "sha256": "fe764778761c29f3a469f2def4e9c9a08a54753787152c45a1df0668405b57a1"
+      "size": 70562,
+      "sha256": "4820e199848e92c5cdb57abd35eb55abd0daf37a29342ba8d250762d024ed0e3"
     },
     {
       "rel": "03-host-plugin/branch-guard.selftest.mjs",
@@ -385,8 +385,8 @@
     },
     {
       "rel": "03-host-plugin/gate.mjs",
-      "size": 27466,
-      "sha256": "b1d35f6d6361e8d0acedd7ca1aa47c36d3d71e29b263f209ed50153d02e9222b"
+      "size": 27467,
+      "sha256": "ded600cb1f9fbf82d7f15f5b87919acee41821395eb0142ed7dc6e39cc9a4e3d"
     },
     {
       "rel": "03-host-plugin/gate.selftest.mjs",
@@ -395,13 +395,13 @@
     },
     {
       "rel": "03-host-plugin/handover-gate.DESIGN.md",
-      "size": 41727,
-      "sha256": "56263ccb3ea0029d6f40855a516991dd563df95abe483b436f5da566f8b5b38d"
+      "size": 41771,
+      "sha256": "595dff46082c1b5fd27fd6a95c7a202105c768800c7ff24e4e9957783f1f175e"
     },
     {
       "rel": "03-host-plugin/handover-gate.js",
-      "size": 175528,
-      "sha256": "c528c6619fd6b1aa16f84852f791b01405b1d2bc799efa55f04dd3f5ca64b446"
+      "size": 175532,
+      "sha256": "37df560bd02a1e74e0f3f5969954007fccb8db995c59578e15311121801931ee"
     },
     {
       "rel": "03-host-plugin/handover-gate.selftest.mjs",
@@ -410,18 +410,18 @@
     },
     {
       "rel": "03-host-plugin/plugin-io.js",
-      "size": 42839,
-      "sha256": "b76812a2668b54ad9bf745e378978487d77a351f6d3b651aaa201255b21c94c3"
+      "size": 42886,
+      "sha256": "4874d1ebcbad39ecd5d7383c1289aa6cfd7c09e684e3ccd1cd3b916a135d3118"
     },
     {
       "rel": "03-host-plugin/preset-default-guard.mjs",
-      "size": 13178,
-      "sha256": "afc7e5845e3e9cfa4d30203469cf502df15b24760080f563bd75be4107d0e2d5"
+      "size": 13201,
+      "sha256": "da71fb3e2d3088291df487b417e729f442ce33531fc7f102bdddf66c1bcfade1"
     },
     {
       "rel": "03-host-plugin/report-spill.DESIGN.md",
-      "size": 31637,
-      "sha256": "e4adf1637e3f3d9791e20e170a271119e166f0d537b1d9fb7d83a7c92736f587"
+      "size": 31650,
+      "sha256": "ec2a41b9092c477367351be06290d1556244bd999aa9708b2b39b56598a37aad"
     },
     {
       "rel": "03-host-plugin/report-spill.js",
@@ -435,13 +435,13 @@
     },
     {
       "rel": "03-host-plugin/role-voices.DESIGN.md",
-      "size": 41731,
-      "sha256": "99f6f33697be0d7d7eae9ec11d178ee2ae74a35b15f7772913a69516cbd010e3"
+      "size": 41795,
+      "sha256": "03569c17ae407480b356d8f7c013ba18f1247a2ef7291acfd1645d24affc00d4"
     },
     {
       "rel": "03-host-plugin/role-voices.js",
-      "size": 58304,
-      "sha256": "cdad071314d0b8e186606e49d4f7a76a19d724b5a1c3758e9991c62cb0954689"
+      "size": 58419,
+      "sha256": "d466a815dbac36032342aa8dd9f007621537959389be9ff7c8f7a89a3dc74fa5"
     },
     {
       "rel": "03-host-plugin/role-voices.selftest.mjs",

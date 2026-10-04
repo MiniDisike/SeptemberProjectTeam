@@ -95,7 +95,7 @@ export const ROLE_REGISTRY = [
   {
     id: '提问闸门', title: '用户注意力闸门员', vote: true, stamp: '【提问 · 用户注意力闸门员】', remit: '用户注意力：这事值不值得占用用户的时间？',
     duty: '**拦住"该自己定却拿去问用户"的事**：逐条判「该问用户 / 该主代理自己定」，并指回用户原话或账本判据',
-    when: '主代理准备向用户提问之前；以及用户说"这种事不需要浪费我的时间"之类的话时（那是它该在岗的信号）',
+    when: '主代理准备向用户提问之前；以及用户流露出"这事不值得占用我时间"之类的话时（那是它该在岗的信号）',
     hard: '判据：**不可逆 / 花用户的钱 / 改变用户要做的动作 / 用户可见行为** ⇒ 该问；**自己的判据·测试·正则·措辞、可逆且不影响用户所见、用户已经答过的、投票机制本身** ⇒ 自己定，不许问',
     how: 'node warden.mjs find add --by 提问闸门 --text "该问/自己定" --why "指回原话或判据" --ref R#',
   },
@@ -823,7 +823,7 @@ export function unknownWindowNotice(scope, cmd) {
   ].join('\n');
 }
 
-/** 本窗口自己的那本原话账：`.warden/voices/<会话id>.jsonl` —— 「各自窗口先写入单独的」 */
+/** 本窗口自己的那本原话账：`.warden/voices/<会话id>.jsonl` —— R37 要求的"各窗口先写入自己那本" */
 export function voiceFileFor(dir, session) {
   return path.join(dir, 'voices', `${String(session).replace(/[^\w.-]/g, '_')}.jsonl`);
 }
@@ -877,13 +877,13 @@ export function lastPendingQuestion(file) {
 /**
  * 跨窗口的那一本：`.warden/LEDGER.jsonl`（**未做完项的汇总 + 各窗口完成状态**）。只增不改。
  *
- * 逐字对得上：
- *   · 「但也有一个总账本」     → 全工程一本，所有窗口读得到；
- *   · 「各自窗口先写入单独的」 → 原话先落 `.warden/voices/<窗口>.jsonl`（见 syncVoices）；
- *   · 「做完后就标记做完」     → `ledger done --req R#` 写一笔 `status:"done"`，带**窗口 id + 时间**；
- *   · 「未做完的写入总账本」   → `ledger flush` / 收尾 `results` 自动落这一笔
+ * 逐条对得上（**约束来源：用户原话「（用户原话已隐去 —— 公开版不留逐字）」**）：
+ *   · **另有一本总账本**       → 全工程一本，所有窗口读得到；
+ *   · **各窗口先写入自己那本** → 原话先落 `.warden/voices/<窗口>.jsonl`（见 syncVoices）；
+ *   · **做完后要标记做完**     → `ledger done --req R#` 写一笔 `status:"done"`，带**窗口 id + 时间**；
+ *   · **未做完的写入总账本**   → `ledger flush` / 收尾 `results` 自动落这一笔
  *                              （**不做完就静默消失 = 事故**，所以这一笔是强制的）；
- *   · 「总账每条可辨出处」     → 每条**必有** `window` + `projectRoot` + `at`。
+ *   · **总账每条可辨出处**     → 每条**必有** `window` + `projectRoot` + `at`。
  */
 const LEDGER_FILE = 'LEDGER.jsonl';
 
@@ -946,7 +946,7 @@ export function appendLedger(dir, rec) {
  * ★ **`done` 是"粘"的 —— 不许被后来的 `open` 悄悄盖回去。**
  *   场景：窗口 A 做完 R37、标了 done；窗口 B 收尾时把 R37 当成"自己还没做完"、又写了一笔 open。
  *   若按"后写为准"，那条 done 就被抹掉了 ⇒ **别的窗口会以为这件还没做**，
- *   而这正是用户要的那件事（「做完后就标记做完」）当场失效。
+ *   而这正是用户要的那件事（R37 要求的"**做完后就标记做完**"）当场失效。
  *   所以：done 一旦立住，后来的 open **不改状态**，只记进 `postDoneOpen` **明着报出来**。
  *   真要重开，得显式 `ledger reopen --req R#`（把话说清楚，而不是靠一次手滑的 flush）。
  */
@@ -1024,7 +1024,7 @@ export function unfinishedForWindow(dir, session, root, ledgerId) {
          * 实测（P-M19 自己的证据脚本 `r37_musts.mjs` 的 ③-2 抓到的）：
          *   `ledger done --req R1` 之后再跑一次 `results`，它会**又**写一笔 `open` ——
          *   因为这条退路只看"最新一轮的 ROUNDS 状态"，而账本里那条 done 它**没看**。
-         *   后果正对着用户那句话（「**做完后就标记做完**…不许留着让别的窗口重复做」）：
+         *   后果正对着用户那句话（R37：**做完后要标记做完**、**不许留着让别的窗口重复做**）：
          *   别的窗口收尾时会把一件**已经做完**的事重新报成"未做完"。
          *   ⚠ `ledgerState` 那边 done 仍然是"粘"的（不会被 open 盖回去），
          *     所以这不是数据被抹掉，而是**账本里凭空多出噪音 + 收尾报错数** —— 一样要治。
@@ -1565,7 +1565,7 @@ export function check(root, { specText, devText, rounds, watches } = {}) {
    * ★ **把角色仪表接进 check 的提醒**（2026-09-17 新增）。
    *
    * 为什么（脑子A 第①条，原文）：「报警对象错位：唯一去向是用户 notice，而用户逐字把责任给了监督员
-   *   （VOICE 198-199「监督员要保证几个角色是正确在运行」）；**没有任何路径把 rolesLine 交给监督员**。
+   *   （VOICE 198-199，用户原话：「（用户原话已隐去 —— 公开版不留逐字）」）；**没有任何路径把 rolesLine 交给监督员**。
    *   给不能改的人看，不给该改的角色看。」
    * ⇒ 这一行现在**同时也进 check**（`warns`，只计数不硬失败）：AI/监督员跑 check 时就看得见，
    *   而不是只在用户那一行飘过去。**不是替代 notice，是多给一条能改的人看得到的路。**
@@ -1891,14 +1891,14 @@ export function sessionWroteDisk(events) {
  */
 export function syncVoices(root, dir, { rebuild = false, session, allWindows = false, mergeAggregate = false } = {}) {
   /**
-   * ★ R37「各自窗口先写入单独的」：给了 `session`（或默认本窗口）时，
+   * ★ R37 要求的"**各窗口先写入自己那本**"：给了 `session`（或默认本窗口）时，
    *   这次同步**只扫那一个窗口**，而且**写进它自己那本** `.warden/voices/<会话id>.jsonl`。
    *   汇总本 `.warden/VOICE.jsonl` 只在**显式扫全集**（`--all-windows`）时才当目标。
    *
    * 为什么必须分文件写（而不是"写同一个文件但只追加本窗口"）：
    *   ① `--rebuild` 会**先清空**目标文件 —— 若 scoped 也拿汇总本当目标，一次
    *      `voices --rebuild` 就把别的窗口的原话**全抹掉**（那是不可逆的事故）；
-   *   ② 用户原话是「各自窗口先写入单独的」—— 分文件就是那句话的字面实现。
+   *   ② R37 要求的正是"**各窗口先写入自己那本**"—— 分文件就是那句话的字面实现。
    */
   const want = allWindows ? null : (String(session ?? '').trim() || null);
   const dirNames = quoteDirNames(root);
@@ -1938,7 +1938,7 @@ export function syncVoices(root, dir, { rebuild = false, session, allWindows = f
     // ★ R37：默认只扫**本窗口**。别的窗口的原话不进这本账。
     //    两个计数器因此**互不重叠**：子代理只进 subagent，别的窗口只进 otherWindow。
     if (want && s.sessionId !== want) { skipped.otherWindow += 1; continue; }
-    // ② 没写过磁盘的会话：用户说"没有进行记录的就不需要归属进来"（纯问答的窗口）
+    // ② 没写过磁盘的会话：用户说过"没做记录的会话不必归属进来"（纯问答的窗口）
     const { events } = decodeSession(s.file);
     if (!sessionWroteDisk(events)) { skipped.noDisk += 1; continue; }
     let n = 0;
@@ -2005,7 +2005,7 @@ export function syncVoices(root, dir, { rebuild = false, session, allWindows = f
   }
   else if (fresh.length) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.appendFileSync(p, (fs.existsSync(p) ? '' : header) + fresh.map((v) => JSON.stringify(v)).join('\n') + '\n', 'utf8'); }
   /**
-   * ★「各自窗口先写入单独的」：本窗口那本**必须真的建出来，而且不能是个空壳**。
+   * ★ R37 的"**各窗口先写入自己那本**"：本窗口那本**必须真的建出来，而且不能是个空壳**。
    * 若这次没有新增（原话早在汇总本里了）就不建文件 ⇒ 这本账永远是 0 条，
    * 读的人会以为"这个窗口一句话都没说过" —— 那又是"0 输入当没问题"。
    * 所以没有文件、**或盘上已经是 0 条**时，把本窗口在汇总本里的原话**落一份到它自己这本**。
@@ -2042,8 +2042,8 @@ export function syncVoices(root, dir, { rebuild = false, session, allWindows = f
    *   这里改的是**取数 / 落盘** —— 让汇总本真的有那条原话。
    * ⚠ **绝不 rebuild 汇总本**：只 `append` + 按 `session|text` 去重。这正是原来
    *   "scoped 不许写汇总本"那条理由①的正解（怕 `--rebuild` 把别的窗口的原话一次抹掉）：
-   *   **只增不改就永远抹不掉**。理由②（「各自窗口先写入单独的」）仍然成立 ——
-   *   本窗口那本**先写**，而用户同一句话里也说了「**但也有一个总账本**」，汇总本就是那个总账本。
+   *   **只增不改就永远抹不掉**。理由②（R37 的"**各窗口先写入自己那本**"）仍然成立 ——
+   *   本窗口那本**先写**，而用户同一条要求里也说了"**另有一本总账本**"，汇总本就是那个总账本。
    *
    * 谁传这个开关：**只有 `voices` 命令**。`ask` 走同一套 `syncVoices`，但它按设计
    *   **不写汇总本**（L42 ⑦ 钉着这条）⇒ 默认 false，不许顺手打开。
@@ -2251,7 +2251,7 @@ export function loadVoices(dir, { session } = {}) {
  * 这类缺口原来**连计数都没有**。
  *
  * 活病例：用户提过角色说话要像网游聊天区的显示风格（角色名更小更细灰色、`某某某：XXX`）
- * +「**真正在栏目里滚动的模样**」，而 SPEC/MAP/ARCH/REPORT/DEVIATIONS/ROUNDS 里
+ * + 要求**真正在栏目里滚动的那个模样**，而 SPEC/MAP/ARCH/REPORT/DEVIATIONS/ROUNDS 里
  * `滚动|栏目|聊天区|角色名|字号|字体` **命中 0**。
  *
  * 补法：`.warden/CLAIMS.jsonl`（append-only）逐条认领 VOICE 里的原话。
@@ -2385,7 +2385,7 @@ export function checkFindings(dir, specIds) {
   }
   if (noRef) {
     warns.push(`[发现] 有 ${noRef} 条发现**还没落到做**（没有 --ref，按 AI 提案算）—— 光查出来不接进清单，`
-      + '就是用户说的"添垃圾形成干扰"。（共 ' + String(f.items.length) + ' 条发现，其中有出处 ' + String(sourced) + ' 条）');
+      + '就是用户说的"查出来又不解决，只是徒增垃圾、形成干扰"。（共 ' + String(f.items.length) + ' 条发现，其中有出处 ' + String(sourced) + ' 条）');
   }
   return { fails, warns, items: f.items, noRef, sourced };
 }
@@ -2674,8 +2674,8 @@ export function searchVoices(dir, kw, { session } = {}) {
  * 中文问句找"可能已经答过"的候选。
  *
  * 为什么不能只用关键词：中文没空格，而且**用户的答案里往往根本没有问句里的词**。
- * 实测：问"木材工艺链是有意放着还是被漏掉了"，用户答的是
- * 「木材工艺链是我的一个比喻…不是要去掉，反而是要加强」—— 字面只有"木材工艺链"五字重合。
+ * 实测：问"木材工艺链是有意放着还是被漏掉了"，用户答的却是
+ * 「（用户原话已隐去 —— 公开版不留逐字）」—— 只在"木材工艺链"这一处字面重合。
  * 所以这里改成：**按最长公共子串 + n-gram 重合度排序，把候选捞出来**，
  * 判断"是不是真答过"交给"脑子"那一层（脚本判不准，这点必须诚实）。
  */
@@ -2724,7 +2724,7 @@ function snapshotsDir(dir) { return path.join(dir, 'snapshots'); }
 
 /**
  * 把 params.yml 里点名的**源文件**整个拷一份 + 记指纹。
- * 为什么不只是记哈希：用户要的是"出问题能拉出来比较"—— 得留着内容，不只是指纹。
+ * 为什么不只是记哈希：用户要的是**出问题能拉出来比较**—— 得留着内容，不只是指纹。
  */
 export function takeSnapshot(root, dir, label) {
   const ws = parseParams(fs.readFileSync(path.join(dir, 'params.yml'), 'utf8'));
@@ -4379,8 +4379,8 @@ export function dissentExplained(t) {
 /**
  * ==================== 「角色是不是摆设」的机械仪表 ====================
  *
- * 用户 2026-09-16 的原话（逐字）：「（用户原话已隐去 —— 公开版不留逐字）」
- *   「**监督员要保证几个角色是正确在运行。**」
+ * 用户 2026-09-16 的原话（逐字：「（用户原话已隐去 —— 公开版不留逐字）」）
+ *   —— 要的是**监督员要保证几个角色是正确在运行**。
  *
  * 所以"呈现"和"摆设"的差别**必须可机检**，否则又是一句文本期望。这里只算数，判据分两类，
  * 并且**在输出里逐条标明哪一类**（把代理判据说成硬判据，就是这套东西最该防的病）：
@@ -6078,7 +6078,7 @@ function main(argv) {
     }
     for (const u of unreadable) console.log(`提醒: [档位] 读不到当前值 —— ${u}`);
 
-    // 与 AI 写进来的值对账（用户选的就是"两者都要 + 交叉验证"）
+    // 与 AI 写进来的值对账（用户选的就是**两者都要 + 交叉验证**）
     const declaredRaw = arg('values');
     if (declaredRaw) {
       let declared = {};
@@ -6153,7 +6153,7 @@ function main(argv) {
      *   而"不要"天生就是一句话（用户的原话），交付散文里不会出现这一整句
      *   ⇒ **这条判据结构上永远不可能响**（那个会话里 `你说过**不要**` 出现 **0 次**，
      *      而 R7 的"不要"在 SPEC 里躺了 6 次）。
-     *   ⇒ 它给了人"有这道闸"的错觉，实际是**死的**。这正是用户说的"一用就失灵"。
+     *   ⇒ 它给了人"有这道闸"的错觉，实际是**死的**。这正是用户抱怨过的"一用就失灵"。
      *
      * **修法**（与 `--covered` 同一套思路，不发明第二套）：`done` 时，
      *   若这条需求有「不要」项，**必须逐条交代怎么避开的**：`--avoided "不要项=怎么避开的"`。
@@ -6172,7 +6172,7 @@ function main(argv) {
         console.log('  没交代的：');
         for (const m of missNot) console.log(`    · ${m}`);
         console.log('  ⇒ 逐条说清**怎么避开的**：--avoided "不要项=怎么避开的"');
-        console.log('  为什么拒收（真实事故）：隔壁窗口把「我不要的是被锁定成平面的偷懒代码」锁进了 SPEC、');
+        console.log('  为什么拒收（真实事故）：隔壁窗口把「**不要被锁定成平面的偷懒代码**」锁进了 SPEC、');
         console.log('    也跑了 check（报"需求监督通过"），然后交付了一个锁在平面上的实现 ——');
         console.log('    因为旧判据拿**整句自然语言**去 includes **交付散文**，结构上永远不可能响（那个会话里它命中 0 次）。');
         console.log('    现在：**每一条「不要」都必须被显式回应**，沉默不再等于通过。');
@@ -6187,7 +6187,7 @@ function main(argv) {
         console.log(`[拒收] ${req} 声明了 ${specRow.items.length} 个必经子项，而你这次只报告覆盖了 ${specRow.items.length - miss.length} 个。`);
         console.log(`  还差：${miss.join('、')} —— 要么补齐，要么改用 --status partial --missing_half "…"`);
         console.log(`  （补齐后重报：--status done --covered "${specRow.items.map((it) => `${it}=src/xxx.js:12`).join(',')}"）`);
-        console.log('  为什么拒收：「跑了一小时上亿的 token，关键问题几个只解决了半个」就是要靠这一步抓的 ——');
+        console.log('  为什么拒收：「跑了一小时上亿的 token，关键问题**只解决了半个**」就是要靠这一步抓的 ——');
         console.log('  done 却只覆盖一半，会让"半个"看起来像"整个"，比压根没做更坏（没做至少记录是诚实的）。');
         return 1;
       }
@@ -6562,7 +6562,7 @@ function main(argv) {
     console.log('');
     // ⚠ 整句放在**一个字符串里**（原来拆成两行 console.log）：拆断之后，
     //   脱敏脚本按 `「…」` 整块替换时会把中间的 `');` + `console.log('` 一起吃掉 ⇒ 语法坏掉。
-    console.log('扩编规则（用户 2026-09-25：「写完代码复查不应该那么久」—— 默认不审，只在触发条件成立时才派）：');
+    console.log('扩编规则（用户 2026-09-25 的要求：写完代码后的复查不该那么久 —— 默认不审，只在触发条件成立时才派）：');
     console.log('  · **默认不派脑子** —— 随手小改动不必审；');
     console.log(`  · 只在 ${BRAIN_TRIGGER_IDS.join(' / ')} 三种触发条件成立时才派脑子，`);
     console.log('    并用 `brain record --trigger <哪一种>` 把理由记下来；');
@@ -6663,7 +6663,7 @@ function main(argv) {
     if (dispatches.length > 10) console.log(`    …（还有 ${dispatches.length - 10} 次）`);
     console.log('');
     const code = (writes > 0 && dispatches.length === 0) ? 1 : 0;
-    console.log(`  判定：${code === 1 ? '★ **有写、却一次单都没派** —— 这就是用户说的"一个干活的累死"' : '有写也有派单（派单 ≠ 派得好，这一点要人读）'}`);
+    console.log(`  判定：${code === 1 ? '★ **有写、却一次单都没派** —— 这就是用户说的"一个人干所有活、活全压给他"' : '有写也有派单（派单 ≠ 派得好，这一点要人读）'}`);
     console.log(`  退回码：${code}（⚠ 代理判据：只报事实，不下"效率"结论）`);
     return code;
   }
@@ -6885,8 +6885,9 @@ function main(argv) {
   }
   if (cmd === 'needs' || cmd === 'results') {
     /**
-     * 用户 R51（2026-09-17 逐字；**公开版已隐去原文**）：「本轮任务开始给需求清单、结束时给结果清单并对账」
-     * 对账，从来没有实现过。」—— 所以这两个命令就是那两张清单，一个开工用、一个收尾用。
+     * 用户 R51（2026-09-17 逐字：「（用户原话已隐去 —— 公开版不留逐字）」）
+     *   —— 要的是：**本轮开始给需求清单、结束时给结果清单并对账**，从来没实现过
+     *   ⇒ 所以这两个命令就是那两张清单，一个开工用、一个收尾用。
      *
      * 口径（不许糊弄）：
      *   · **只给本轮**：本窗口最近 `--last N` 条原话（默认 5），不是全历史（那正是他骂过的"从古至今全砸进去"）。
@@ -7206,7 +7207,7 @@ function main(argv) {
       console.log('');
       console.log('  两种收法（都不许"就这么放着"）：');
       console.log('    ① 把原话贴进来：' + `node warden.mjs role say --role ${hits[0].role} --text "…逐字原话…"`);
-      console.log('    ② 或者把间接引语删掉，让角色自己说（R6 的原话就是「AI不会把角色的话隐藏」）。');
+      console.log('    ② 或者把间接引语删掉，让角色自己说（R6 要的就是"AI 不要把角色说的话藏起来"）。');
       console.log('  ⚠ 这是启发式，不是判决：命中说明"该核一下"，不代表你一定转述错了。');
       return 1;
     }
@@ -7328,7 +7329,7 @@ function main(argv) {
       if (!r.ok) { console.log(`[拒收] ${r.why}`); return r.code ?? 2; }
       // 前缀必须**按署名给**（谁说的就写谁）——
       // 原来只有"资料员 else 方向员"两分支，监督员会被打成【方向 · 工程方向员】（实测踩到）。
-      // ⚠ 归属提醒（用户 2026-09-16 澄清）：「提示前带角色名」这个写法是 **AI 提的建议、用户没反对**，
+      // ⚠ 归属提醒（用户 2026-09-16 澄清）：**提示前带角色名**这个写法是 **AI 提的建议、用户没反对**，
       //   不是用户提的要求（见 SPEC.md R38）。别拿它当"用户要求过"的证据。
       const stampBy = { 资料员: ROLE_STAMP.research, 方向员: ROLE_STAMP.direction, 监督员: ROLE_STAMP.supervisor };
       const stamp = stampBy[r.record.by] ?? ROLE_STAMP.keeper;
@@ -7900,7 +7901,7 @@ function main(argv) {
     const { fails, warns, spec, devs } = check(root);
     console.log(ROLE_STAMP.check + ' 需求监督检查');
     /**
-     * `--quiet`：**只印结论与失败，把提醒压成一行计数**（用户 2026-09-17：「token 使用量应该优化」）。
+     * `--quiet`：**只印结论与失败，把提醒压成一行计数**（用户 2026-09-17 提的要求：token 使用量要优化）。
      * 为什么是提醒行而不是失败行：一轮里我要跑好几次 check，每次都把 7 行提醒重新塞进上下文纯属重复
      * （实测一次完整 check = 1408 字符 / 16 行，其中 7 行是提醒）；而**失败是必须看的**，一条都不许少。
      * 收尾那次（对外宣布完成前）不加 --quiet，照样全量看。
@@ -8030,7 +8031,7 @@ const HELP = `warden.mjs —— 需求监督员 / 交付审查 / 数据账本
   node warden.mjs ledger <add|done|reopen|flush|show|ids>
       ★ **总账本**（R37）：跨窗口可见的一本 .warden/LEDGER.jsonl —— 未做完项的汇总 + 各窗口完成状态。
       每条都带 **窗口 id + 工程根 + 时间** ⇒ 别的窗口读得出是谁的（不许混成一本看不出出处的账）。
-        · ledger done --req R1 --title "…"   = 「做完后就标记做完」（带窗口 id + 时间）；
+        · ledger done --req R1 --title "…"   = R37 要求的"**做完后就标记做完**"（带窗口 id + 时间）；
         · ledger add --req R1 --status open   = 记一件没做完的；
         · ledger reopen --req R1              = **唯一**能把 done 打回 open 的显式入口
           （done 是**粘**的：后来的 open 盖不回去，只记成"做完之后还有人当它没做完"）；

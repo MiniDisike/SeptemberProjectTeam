@@ -12,6 +12,13 @@
 _lab/
 _brainB_tmp/
 
+# ⚠ 自检沙箱（2026-10-04 补）：`node 01-skill/selftest.mjs` 会在工程根建
+# `.warden-selftest/`，里面是**账本副本**（VOICE.jsonl / SPEC.md / ROUNDS.jsonl…）。
+# ⚠ 上面那三条 `.warden/`、`*.warden/`、`**/.warden/` **都匹配不到它** ——
+#   `.warden/` 匹配的是**同名**目录，`-selftest` 后缀让它整个漏网。
+#   而这是**公开仓**：一次 `git add .` 就会把用户账本原样推上去，正是本文件要防的那类事故。
+.warden-selftest/
+
 # 常见噪声
 node_modules/
 *.log

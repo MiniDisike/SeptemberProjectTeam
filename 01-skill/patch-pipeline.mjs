@@ -2,10 +2,10 @@
 /**
  * patch-pipeline.mjs —— 「派 → 复制 → 改 → 角色检查 → 替换」这条**直线动作**的机制化（R32）
  *
- * 用户逐字（2026-09-24）：
- *   「**派子代理进行逐条的修改**，但要**复制修改**，改完**派角色检查**，确认无误才**替换**。
- *     这里是几个直线动作要固定，不能遗留，比如**复制改完不检查**，
- *     或者**检查了不替换现有的等于没做**。」
+ * **约束来源（用户逐字已隐去 —— 公开版不留逐字）**：
+ *   R32 把几个**直线动作**固定成机制，**不许遗留**：「派子代理进行逐条的修改」、
+ *   「复制修改」→「派角色检查」→「确认无误才替换」；
+ *   点名的两条漏：**「复制改完不检查」**、**「检查了不替换现有的等于没做」**。
  *
  * ## 机制怎么"固定"（每一条都是 exit code，不是建议）
  *
@@ -186,7 +186,7 @@ const copyName = (rel) => crypto.createHash('sha256').update(rel).digest('hex').
 /**
  * ★★ **缺陷3（2026-09-24 实测出来的真 bug）**：`--pair "左:右"` 原来写的是
  *   `const [l, r] = args[i + 1].split(':')` —— 在**含盘符的 Windows 路径**上会切错：
- *     "a.mjs:C:\\Users\\linyu\\.dsh\\skills\\task-warden\\warden.mjs".split(':')
+ *     "a.mjs:C:\\Users\\<USER>\\.dsh\\skills\\task-warden\\warden.mjs".split(':')
  *       → ['a.mjs','C','\\Users\\…']  ⇒  [l,r] = ['a.mjs','C']   ← 右半边只剩一个盘符
  *   而主代理自测时用的是**相对路径** `'a\\x.txt:b\\x.txt'` ⇒ 恰好没有第二个冒号 ⇒ "测过了"。
  *   ⇒ 现在两种写法都认，**新写法优先**：
@@ -266,7 +266,7 @@ function commonAncestor(list) {
  *       `C:\PROGRA~1`（**8.3 短名**）。
  *   ⇒ 现在统一走 `normKey()`：路径**存在**时用 `fs.realpathSync.native()` ——
  *     Windows 上它**同时**规范化大小写（返回盘上真实大小写）**并展开 8.3 短名**（实测
- *     `C:\PROGRA~1` → `C:\Program Files`、`CASEtest.TXT` → `…\CaseTest.txt`）；
+ *     `C:\PROJEC~1` → `C:\Project Archive`、`CASEtest.TXT` → `…\CaseTest.txt`）；
  *     不存在时退回 `path.resolve()` + Windows 下 `toLowerCase()`（大小写不敏感是 NTFS 的默认语义）。
  *   ⚠ 这是**平台语义**修正，不是放宽：左值仍然必须真的匹配上 `--files` 里的一项，否则照旧 exit 2
  *     （而且现在还会给"你是不是想写 X"的提示，不许只丢一句"没匹配"）。
@@ -1226,7 +1226,7 @@ if (cmd === 'apply') {
   append({ at: now(), id, step: 'postchecked', kind: 'fingerprint', ok: reOk, cmd: null, code: null, items: recheck })
   /**
    * ★★ **2026-09-24 修（「记录」实读出来的洞）**：全部 `changed=false` 时原来**照样 exit 0**、
-   *   `status` 报"已完成" —— 而用户 R32 逐字说"**检查了不替换现有的等于没做**"。
+   *   `status` 报"已完成" —— 而 R32 的约束（出处已隐去 —— 公开版不留逐字）是"**检查了不替换现有的等于没做**"。
    *   "复制了、检查了、替换了，但**一个字都没改**"**同样是等于没做**，不许判成功。
    *   ★ **D18（审查实测）**：原来这里先打 `✓ … 已替换 N 个文件` **再** exit 1 ⇒ 包装脚本按 `✓` 判会误读。
    *      ⇒ 现在全都没变时**不打印 ✓**（连下面复核段的 `✓ 指纹变了` 也不打），改打 `[卡住]`。
