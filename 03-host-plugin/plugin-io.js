@@ -282,8 +282,8 @@ const tmpOut = path.join(os.tmpdir(), 'task-warden-check-' + String(process.pid)
  *     账本找不到，屏幕和闸都是空的。」硬证据：`PLUGIN-LIVE.json` 的 detail 是
  *     `[结构] 缺 .warden/SPEC.md`，而真账本在**另一个盘**的 `task-warden\.warden\SPEC.md` 下。
  *   · **记录**：「当前红是**结构性**的（7 个账本文件全 missing），不是模型一轮能补完的。」
- *   · 约束（出处已隐去 —— 公开版不留逐字）：「要真正能够安装、装完就能正常使用」
- *     + R25 的必须项「新窗口自动建轮次（**不是拒交**）」。
+ *   · 约束（出处已隐去 —— 公开版不留逐字）：**要真正能够安装、装完就能正常使用**；
+ *     再加 R25 的必须项：**新窗口自动建轮次，不是拒交**。
  *
  * 实测（2026-09-23，在临时副本上跑）：`warden.mjs init` 在"有 .warden 只有插件文件、没有 .git"的目录里
  *   **照样能建出骨架**（SPEC.md / ROUNDS.jsonl / params.yml / CLAIMS.jsonl / config.json）。
@@ -392,7 +392,7 @@ let speechCount = 0
 try { speechCount = readJsonl('.warden/ROLE_SPEECH.jsonl').length } catch (e) { speechCount = 0 }
 
 // ── 1b) 角色健康：「角色是不是摆设」的机械仪表（用户 2026-09-16 逐字要的那个"呈现"）
-//   约束（出处已隐去 —— 公开版不留逐字）：「监督员要保证几个角色是正确在运行」
+//   约束（出处已隐去 —— 公开版不留逐字）：**监督员要保证几个角色是正确在运行**。
 //   判据在 warden.mjs 的 `rolesHealth`（【硬】票数/反对率/有无产出、【代理】独有项/同构），
 //   那一行的措辞也**由 warden.mjs 产生**（`roles --health --json` 的 line 字段）——
 //   **不许插件自己再拼一套**（两套措辞 = 两套口径，这正是本 skill 反复防的事）。

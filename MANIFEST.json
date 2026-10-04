@@ -20,8 +20,8 @@
     },
     {
       "rel": "01-skill/SKILL.md",
-      "size": 35140,
-      "sha256": "d954915acf222c26fe6c78ebaeab984cdec2e6340043803121750d735ab28168"
+      "size": 35157,
+      "sha256": "66c51b3cd960305601f58e3d38f073faf919048bbcb8bd326924fcd3490f3c2a"
     },
     {
       "rel": "01-skill/bill-compare.mjs",
@@ -50,8 +50,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L11_false_pass.mjs",
-      "size": 4456,
-      "sha256": "35a08102a6f669b75d0a7e8fcfc29b69de0649968ad659adf535a5a756784a75"
+      "size": 6777,
+      "sha256": "759d8726dc4f7fb040182571381a8cf34028bd0a2d0de4f84db4701f1d518f35"
     },
     {
       "rel": "01-skill/experiments/lab/L12_conditional_consent.mjs",
@@ -240,8 +240,8 @@
     },
     {
       "rel": "01-skill/experiments/lab/L5_attribution_laundering.mjs",
-      "size": 8336,
-      "sha256": "0cdcbd15dc14166d4b6f55984c5ad56b26de03b8d3b962962f46ce1a8060daf9"
+      "size": 13154,
+      "sha256": "46d349883177bfa3178db6a7eb925a3519d95c2563fc225bdb30f091e2fa3a6e"
     },
     {
       "rel": "01-skill/experiments/lab/L6_false_accusation.mjs",
@@ -280,8 +280,8 @@
     },
     {
       "rel": "01-skill/patch-pipeline.mjs",
-      "size": 125988,
-      "sha256": "cd14f66ff8613c9755ded4754148e1a0552a41db6c0ff6ff3c2f5e7e39a4a816"
+      "size": 126004,
+      "sha256": "2edbc169570b6f2b1aa4d572d68b8351a8d6ea9e54b8422e9aaaaf7888a6ea62"
     },
     {
       "rel": "01-skill/selftest.mjs",
@@ -295,8 +295,8 @@
     },
     {
       "rel": "01-skill/warden.mjs",
-      "size": 505810,
-      "sha256": "303b62c8655e0ce9ddeb2bcfd4431bc75203b32d80b6f016dabed61daad4cff0"
+      "size": 505808,
+      "sha256": "3f04ef61653ec45c0526d5ac84e3f23aef59c2241a6add457be2f6f3ca4c1e57"
     },
     {
       "rel": "02-preset-roles/README.md",
@@ -325,8 +325,8 @@
     },
     {
       "rel": "02-preset-roles/team-guard.mjs",
-      "size": 182737,
-      "sha256": "e75b09dafd195b5afa000c3c068bb170de3c637602904fa6cafb129e0b519ac2"
+      "size": 182844,
+      "sha256": "e28e605cd30ab2c2b2bee8ad94d54e2241d91bcaa659130a9a5a34ce3315fe5a"
     },
     {
       "rel": "02-preset-roles/team-guard.selftest.mjs",
@@ -340,13 +340,13 @@
     },
     {
       "rel": "03-host-plugin/branch-guard.DESIGN.md",
-      "size": 52813,
-      "sha256": "838e85557f1f9fdf4b12f30e77770ac4e3a2c4eedbc55b59a1d390b9871e3822"
+      "size": 52840,
+      "sha256": "bd051f908143f7fa1c33eb82081b0eb75de7667f70db8eae1ce10c965cade4ea"
     },
     {
       "rel": "03-host-plugin/branch-guard.js",
-      "size": 70562,
-      "sha256": "4820e199848e92c5cdb57abd35eb55abd0daf37a29342ba8d250762d024ed0e3"
+      "size": 70593,
+      "sha256": "475983232a4d637460675f511ded091589dd60374bfb583979182d70c38985ba"
     },
     {
       "rel": "03-host-plugin/branch-guard.selftest.mjs",
@@ -395,8 +395,8 @@
     },
     {
       "rel": "03-host-plugin/handover-gate.DESIGN.md",
-      "size": 41771,
-      "sha256": "595dff46082c1b5fd27fd6a95c7a202105c768800c7ff24e4e9957783f1f175e"
+      "size": 41809,
+      "sha256": "351d46b39607cfae766247b65eed8747352bca5601f2b5d49298fe64773cc8d5"
     },
     {
       "rel": "03-host-plugin/handover-gate.js",
@@ -410,8 +410,8 @@
     },
     {
       "rel": "03-host-plugin/plugin-io.js",
-      "size": 42886,
-      "sha256": "4874d1ebcbad39ecd5d7383c1289aa6cfd7c09e684e3ccd1cd3b916a135d3118"
+      "size": 42887,
+      "sha256": "a77b7a85d93dca632b3f6aa8accedddf494ede9b5a98040136f062fc6bcd1553"
     },
     {
       "rel": "03-host-plugin/preset-default-guard.mjs",
@@ -420,8 +420,8 @@
     },
     {
       "rel": "03-host-plugin/report-spill.DESIGN.md",
-      "size": 31650,
-      "sha256": "ec2a41b9092c477367351be06290d1556244bd999aa9708b2b39b56598a37aad"
+      "size": 31644,
+      "sha256": "f5160087ea0b831a9c5973de39bb67fddf97ea95624722fa4e31154c25c5a3c2"
     },
     {
       "rel": "03-host-plugin/report-spill.js",
@@ -440,8 +440,8 @@
     },
     {
       "rel": "03-host-plugin/role-voices.js",
-      "size": 58419,
-      "sha256": "d466a815dbac36032342aa8dd9f007621537959389be9ff7c8f7a89a3dc74fa5"
+      "size": 58428,
+      "sha256": "9d4b06715883199d6018ce03da533ea96d4da2f2d7a839715afceb4fcb15c089"
     },
     {
       "rel": "03-host-plugin/role-voices.selftest.mjs",
