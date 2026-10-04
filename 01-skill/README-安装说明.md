@@ -15,7 +15,7 @@
 | `warden.mjs` | 主脚本：`init` / `record` / `check` / `report` / `history` |
 | `bill.mjs` | 成本：从 DSH 会话日志算**真实** token / 墙钟 / 模型（AI 编不了） |
 | `selftest.mjs` | 自检：15 条负控（漂移/糊弄/替用户拍板）必须全抓到，3 条正控必须不误伤 |
-| `templates/params-<工程>.yml` | 你那个项目的档位清单（23 个，已逐个验证能从源码读到） |
+| `templates/params-示例.yml` | **填好的样例**，供照着写你自己的；每个工程真正用的那份是 `node warden.mjs init` 生成的 `.warden\params.yml` |
 
 零第三方依赖，只要 **Node 18+**。
 
@@ -23,7 +23,7 @@
 
 ```
 <HOME>\.dsh\skills\task-warden\
-    SKILL.md  warden.mjs  bill.mjs  selftest.mjs  templates\
+    SKILL.md  warden.mjs  bill.mjs  selftest.mjs  patch-pipeline.mjs  templates\
 ```
 
 **不需要杀进程、不需要重启** —— DSH 会热加载 skill 目录，装完当轮就能看到。

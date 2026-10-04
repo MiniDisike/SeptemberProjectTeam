@@ -1,0 +1,51 @@
+# params.yml 的**填好的样例** —— 照着它写你自己那份。
+#
+# ⚠ 先搞清楚这份文件是什么、不是什么：
+#   · 它是**样例**，不是真相源。照着抄、改掉 file 路径、再存成你自己的 `.warden\params.yml`。
+#   · **每个工程真正在用的那份是 `node warden.mjs init` 生成的 `.warden\params.yml`** ——
+#     不要再从 templates 目录拷一份进工程（那就是多出一个真相源，正是最烦的那类漂移）。
+#   · 它得**人工声明**：脚本不知道该盯哪些数据。
+#
+# ── 字段逐条说明（字段名照 warden.mjs 的 parseParams / readWatch，不许猜）────
+#   id     档位的标识，`--values '{"id": 值}'` 用它对账。必填。
+#   label  人看的名字（中文即可），只影响输出可读性。
+#   kind   取值方式，见下表。必填。
+#   file   要读的文件，**相对工程根**（工程根 = 从当前目录往上找最近的有 .git 的那一层）。
+#   name   **只对 rust_const / gd_const 有意义**：源码里那个常量的名字。
+#   path   **只对 json_field / jsonl_last 有意义**：点号路径，如 `renderer.maxAnisotropy`。
+#          ⚠ 两种取值方式认的字段名不一样，所以下面 json 那两条写的是 path，不是 name ——
+#             照抄成 name 的话读出来永远是"路径取不到值"。
+#
+# ── kind 支持（全部来自 warden.mjs 的 readWatch）────────────────────────
+#   rust_const  —— 从 Rust 源码里读 `const NAME: f32 = 1.30;`        → 用 name
+#   gd_const    —— 从 GDScript 里读 `const NAME := 1.30`             → 用 name
+#   file_hash   —— 整个文件的 sha256 前 16 位（"这文件被动过没有"）   → 无额外字段
+#   gd_funcs    —— 文件里函数/方法的**个数**（API 面变没变）           → 无额外字段
+#   json_field  —— 从 JSON 文件按点号路径取值                        → 用 path
+#   jsonl_last  —— 从 JSONL **最后一条能取到值**的记录按点号路径取值   → 用 path
+#
+# 用法：node warden.mjs record / check 会**自己**把这些值从源码里读出来，
+# 和你写进 ROUNDS 的值对账 —— 对不上就是硬失败（你记的和实际的不一样）。
+#
+# ── 下面三条是**填好的样例**，把 file 换成你自己工程里的真实路径即可用 ──────
+watches:
+  # ① rust_const：盯一个花了很多轮调好的数值常量。改坏了 `check` 会当场报出来。
+  - id: ripple_period
+    label: 涟漪周期(秒)
+    kind: rust_const
+    file: <你的工程>/src/plugins/ripple.rs
+    name: RIPPLE_PERIOD_DEFAULT
+
+  # ② json_field：盯 JSON 配置里的一个字段（点号路径，数组用数字下标）。
+  - id: max_anisotropy
+    label: 各向异性上限
+    kind: json_field
+    file: <你的工程>/config/renderer.json
+    path: renderer.maxAnisotropy
+
+  # ③ jsonl_last：盯账本类 JSONL 的最后一条记录 —— 适合"上一轮跑到哪儿了"这类活数据。
+  - id: last_round
+    label: 最后一轮的轮次号
+    kind: jsonl_last
+    file: <你的工程>/.warden/ROUNDS.jsonl
+    path: round

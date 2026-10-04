@@ -1,6 +1,6 @@
 {
   "name": "SeptemberProjectTeam / task-warden (public edition)",
-  "date": "2026-10-03",
+  "date": "2026-10-04",
   "note": "Public edition. Machine-specific paths are derived at runtime by install.mjs; none are baked in. Hashes are computed over LF-normalized, BOM-stripped text — run `node install.mjs --refresh-manifest` after editing any shipped file.",
   "files": [
     {
@@ -15,8 +15,8 @@
     },
     {
       "rel": "01-skill/README-安装说明.md",
-      "size": 5069,
-      "sha256": "274f74a5427230f2d2290c048cc5d36d671ff60d2c5db4a739b3025c161c74ca"
+      "size": 5145,
+      "sha256": "10e310dffdb0e52479d14790ed93c034d986099ebaf6545fbea5ebeedf68c024"
     },
     {
       "rel": "01-skill/SKILL.md",
@@ -279,9 +279,19 @@
       "sha256": "cbb2bbd76fa2fa09f1f96b8bc4b8d5ef99a4003ebd6d2b645b991e493a268738"
     },
     {
+      "rel": "01-skill/patch-pipeline.mjs",
+      "size": 125875,
+      "sha256": "d75031eec49ae438bf67d5e269fdb51dfad56cc2d7117822b215b252e6d12b1f"
+    },
+    {
       "rel": "01-skill/selftest.mjs",
       "size": 99417,
       "sha256": "25a89450e2dd664fd9534330c533ad19ae0010d653f06684b6715d9f64630ba8"
+    },
+    {
+      "rel": "01-skill/templates/params-示例.yml",
+      "size": 3239,
+      "sha256": "9585a5891a37f6055acd4c7bf4cddc6945477bc376fb27504adf58bd4fd9513c"
     },
     {
       "rel": "01-skill/warden.mjs",
