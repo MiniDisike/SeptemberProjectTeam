@@ -263,7 +263,7 @@ function commonAncestor(list) {
  *   在 Windows 上"**同一个文件的不同写法**"会被当成两个不同的东西。审查穷举出来的实测形状：
  *     · **过**：同字符串 / `.\a.txt` / `./a.txt` / 绝对 vs 相对 / 反斜杠 vs 正斜杠 / 尾随空格；
  *     · **不过**（⇒「左值没有匹配到任何 --files 项」**exit 2**）：`A.TXT`、`a.TXT`（大小写不同）、
- *       `C:\PROGRA~1`（**8.3 短名**）。
+ *       `C:\PROJEC~1`（**8.3 短名**）。
  *   ⇒ 现在统一走 `normKey()`：路径**存在**时用 `fs.realpathSync.native()` ——
  *     Windows 上它**同时**规范化大小写（返回盘上真实大小写）**并展开 8.3 短名**（实测
  *     `C:\PROJEC~1` → `C:\Project Archive`、`CASEtest.TXT` → `…\CaseTest.txt`）；

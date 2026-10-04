@@ -281,7 +281,7 @@
     {
       "rel": "01-skill/patch-pipeline.mjs",
       "size": 125988,
-      "sha256": "cf4dd87f16514aa8a6c51826df8024e743bda4f163c1d3f767b27c0511376125"
+      "sha256": "cd14f66ff8613c9755ded4754148e1a0552a41db6c0ff6ff3c2f5e7e39a4a816"
     },
     {
       "rel": "01-skill/selftest.mjs",
