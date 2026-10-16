@@ -529,8 +529,25 @@ node <skill目录>\warden.mjs report             # 需求→交付→成本 主�
 
 ```powershell
 node <skill目录>\warden.mjs check     # exit 0=过 1=有问题 2=用法错
+node <skill目录>\warden.mjs convene   # 四席对账：0=账齐 1=有缺口 2=没账本
 node <skill目录>\warden.mjs report    # 生成 .warden/REPORT.md，给用户看
 ```
+
+### convene：说"完成"之前，把「判」的四席各算一遍账
+
+`check` 验的是**需求 ↔ 交付**的账；`convene` 验的是**席位自己的账** —— 两道都要过，缺一不可：
+
+| 席 | 段 | 它算什么 |
+|---|---|---|
+| 监督员 | 对账 | 每条 R# 有没有推进记录、最新一轮停在哪（in_progress / blocked / partial 都不许当能交付的账） |
+| 审查 | 证据 | done / partial 必须有证据 + 一行审查席复核（`find add --by 审查 --ref R# --source "出处"`） |
+| 记录 | 账目 | 空壳记录（delivered / evidence / why 全空）不许顶账 |
+| 守门 | 支线 | 只**汇报**账本里出现过的支线，不判缺口（"拦"归 branch-guard） |
+| 提问 | 召集 | 开着的议题 + 缺席名单 —— 议题没决、席位缺席 ⇒ 缺口 |
+
+- 五段全部**读盘算账**，不信任任何"AI 说它做过了"的置位。
+- `team-guard` 的 present 闸会在交付点**自动跑它**（`conveneGate`）；闸自己跑不动 ⇒ fail-open 放行 —— 看守层不许把交付堵死。
+- `--topic 议题` 只算那一个议题的召集账。
 
 `check` 不通过时**不许宣布完成**。主表长这样：
 
@@ -564,6 +581,7 @@ node <skill目录>\warden.mjs report    # 生成 .warden/REPORT.md，给用户�
 
 ## 8. 已知边界（别把它当万能）
 
+- **convene 的守门段只汇报不判缺口**（"拦支线"是 branch-guard 的地盘，不重复执法）；conveneGate 跑不起来时 fail-open。
 - **它验的是"出处"和"结构"，不是"语义"**：它能证明"用户确实说过这句"，
   不能证明"这句话真的是在批准这个偏差"。所以 `REPORT.md` 会把「用户决定」原文打出来给你看 ——
   **最后一道防线仍然是人眼**，这是设计上的诚实，不是缺陷。

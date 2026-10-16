@@ -72,28 +72,28 @@ export const ROLE_REGISTRY = [
     how: 'node warden.mjs find add --by 监督员 --text "复核结论" --source "出处/命令" --ref R#',
   },
   {
-    id: '审查', title: '证据审查员', vote: true, stamp: '【审查 · 证据审查员】', remit: '证据：有没有证据支撑？自称算不算数？',
+    id: '审查', title: '证据审查员', vote: true, finding: true, stamp: '【审查 · 证据审查员】', remit: '证据：有没有证据支撑？自称算不算数？',
     duty: '**每条声称都要有证据**：报「事实」必须给出处（绝对路径+行号 / 命令+原样输出）；「自称测过了」不算数',
     when: '任何角色（含主代理）下了**事实性**判断之后；以及交付/结论要定稿之前',
     hard: '不许拿"没查到"当"没问题"（A6）；不许把"听上去合理的解释"当核实（A5）；不许把用户的"否定"写成"正说"（A3）',
     how: 'node warden.mjs find add --by 审查 --text "复核结论" --source "出处/命令" --ref R#',
   },
   {
-    id: '记录', title: '事实记录员', vote: true, stamp: '【记录 · 事实记录员】', remit: '事实：数据/口径/数字对不对？能不能复算？',
+    id: '记录', title: '事实记录员', vote: true, finding: true, stamp: '【记录 · 事实记录员】', remit: '事实：数据/口径/数字对不对？能不能复算？',
     duty: '**报数字必须同时给口径与出处**：口径（怎么数/数什么）+ 出处（文件:行号 或命令），别人能照着重算出同一个数',
     when: '出现任何计数/字节数/通过数/passed-failed/比例的时候',
     hard: '数字必须钉版本与口径（A7）；复现不出来的数就是没证据 —— 本工程已栽过三次（912B→816B、15/15→17/17、"36 次"不可复现）',
     how: 'node warden.mjs find add --by 记录 --text "数字与口径" --source "复算命令/出处" --ref R#',
   },
   {
-    id: '支线守门员', title: '覆盖面守门员', vote: true, stamp: '【守门 · 覆盖面守门员】', remit: '覆盖面：这会不会让某条支线被丢掉、或让项目跑偏？',
+    id: '支线守门员', title: '覆盖面守门员', vote: true, finding: true, stamp: '【守门 · 覆盖面守门员】', remit: '覆盖面：这会不会让某条支线被丢掉、或让项目跑偏？',
     duty: '**盯住"哪条支线被丢下了"**：把当前要动的支线逐条判「在 / 丢 / 判断不了」，并指回 R# 或账本行',
     when: '每轮开工时；以及主代理要动手改盘之前（防止只顺着一条支线细化、把别的支线丢下）',
     hard: '⚠ 账本里查不到 ≠ 产品里没做 —— 没有判据时必须写"判断不了"，不许断言"从未动过"（措辞已因此修过一次）',
     how: 'node warden.mjs find add --by 支线守门员 --text "支线在/丢/判断不了" --source "账本行或命令" --ref R#',
   },
   {
-    id: '提问闸门', title: '用户注意力闸门员', vote: true, stamp: '【提问 · 用户注意力闸门员】', remit: '用户注意力：这事值不值得占用用户的时间？',
+    id: '提问闸门', title: '用户注意力闸门员', vote: true, finding: true, stamp: '【提问 · 用户注意力闸门员】', remit: '用户注意力：这事值不值得占用用户的时间？',
     duty: '**拦住"该自己定却拿去问用户"的事**：逐条判「该问用户 / 该主代理自己定」，并指回用户原话或账本判据',
     when: '主代理准备向用户提问之前；以及用户流露出"这事不值得占用我时间"之类的话时（那是它该在岗的信号）',
     hard: '判据：**不可逆 / 花用户的钱 / 改变用户要做的动作 / 用户可见行为** ⇒ 该问；**自己的判据·测试·正则·措辞、可逆且不影响用户所见、用户已经答过的、投票机制本身** ⇒ 自己定，不许问',
@@ -4095,6 +4095,98 @@ export function tallyVotes(dir, topic) {
 }
 
 /**
+ * 四席召集（`convene` 命令 + present 闸的数据源）。
+ *
+ * 差距结论（用户 2026-10-16）：检查（对账）与审查（证据）是两件事，但被混在一起；
+ * 「判」的四席（审查 / 记录 / 守门 / 提问）没有任何程序载体 —— 只活在 persona 提示词里，
+ * 主代理不提就不出现。本函数把四席各自的账**读盘算出来**，不信任任何"AI 跑过某条命令"的置位：
+ *   · 监督员（对账）：每条 R# 有没有推进记录、最新一轮停在哪 —— 对着账本核对交付物；
+ *   · 审查（证据）：已交付 R# 必须有证据行 + 审查席的复核行（`find add --by 审查`）；
+ *   · 记录（账目）：空壳记录不许顶账（delivered/evidence/why 全空）；
+ *   · 守门（支线）：账本里有 `branch` 字段的支线只**汇报**不判缺口（"拦"归 branch-guard）；
+ *   · 提问（召集）：未决议议题 + 缺席名单 —— 议题开着而席位缺席 ⇒ 缺口（投票自动召集）。
+ *
+ * 返回 { sections, gaps }；`sections[].gaps` 为空 = 那一席的账齐。
+ * 没有 .warden/ 时由调用方处理（命令层 exit 2；present 闸 fail-open）。
+ */
+export function conveneReport(root, { topic = null } = {}) {
+  const dir = path.join(root, WARDEN_DIR);
+  const read = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), 'utf8') : null);
+  const specRaw = read('SPEC.md');
+  const spec = specRaw != null ? parseSpec(specRaw) : [];
+  const rds = readRounds(dir);
+  const findings = readFindings(dir);
+
+  const roundsByReq = new Map();
+  for (const r of rds) {
+    const k = String(r.requirement ?? '');
+    if (!roundsByReq.has(k)) roundsByReq.set(k, []);
+    roundsByReq.get(k).push(r);
+  }
+  const latestOf = (id) => {
+    const mine = roundsByReq.get(id) ?? [];
+    return mine.length ? mine[mine.length - 1] : null;
+  };
+
+  const supervisorGaps = [];
+  if (specRaw == null) supervisorGaps.push(`缺 ${WARDEN_DIR}/SPEC.md —— 没有锁定的需求就没法对账（先跑 warden.mjs init）`);
+  for (const s of spec) {
+    const last = latestOf(s.id);
+    if (!last) supervisorGaps.push(`${s.id}「${s.title || '（无标题）'}」从来没有推进记录 —— 要么真没做，要么做了没说`);
+    else if (String(last.status) === 'in_progress') supervisorGaps.push(`${s.id} 第 ${last.round ?? '?'} 轮停在 in_progress —— 还在做，不许当能交付的账`);
+    else if (String(last.status) === 'blocked') supervisorGaps.push(`${s.id} 第 ${last.round ?? '?'} 轮停在 blocked —— 没说清为什么被卡`);
+    else if (String(last.status) === 'partial') supervisorGaps.push(`${s.id} 第 ${last.round ?? '?'} 轮半交付（缺：${String(last.missing_half ?? '').trim() || '（没写缺哪半）'}）`);
+  }
+
+  const reviewerRefs = new Set(findings.items
+    .filter((x) => String(x.by ?? '').trim() === '审查')
+    .map((x) => String(x.ref ?? '').trim()).filter(Boolean));
+  const reviewGaps = [];
+  for (const s of spec) {
+    const last = latestOf(s.id);
+    if (!last || !['done', 'partial'].includes(String(last.status))) continue;
+    if (!String(last.evidence ?? '').trim()) reviewGaps.push(`${s.id} 标了 ${last.status} 但没给证据 —— 自称不算证据`);
+    if (!reviewerRefs.has(s.id)) reviewGaps.push(`${s.id} 没有审查席的证据行 —— 交付前要有一行审查复核（find add --by 审查 --ref ${s.id} --source "出处"）`);
+  }
+
+  const recordGaps = [];
+  for (const r of rds) {
+    const blank = !String(r.delivered ?? '').trim() && !String(r.evidence ?? '').trim() && !String(r.why ?? '').trim();
+    if (blank) recordGaps.push(`${String(r.requirement ?? '') || '（没写 R#）'} 第 ${r.round ?? '?'} 轮是空壳记录（delivered/evidence/why 全空）`);
+  }
+
+  const branchSeen = new Map();
+  for (const r of rds) {
+    const b = String(r.branch ?? '').trim();
+    if (b) branchSeen.set(b, (branchSeen.get(b) ?? 0) + 1);
+  }
+  const branchNote = branchSeen.size
+    ? [...branchSeen.entries()].map(([b, n]) => `${b}×${n}`).join('、')
+    : null;
+
+  const votesAll = readVotes(dir);
+  const topics = [...new Set(votesAll.map((v) => v.topic).filter(Boolean))];
+  const conveneGaps = [];
+  for (const t of (topic ? [topic] : topics)) {
+    const r = tallyVotes(dir, t);
+    const miss = Array.isArray(r.missing) ? r.missing : [];
+    if (miss.length || /未决/.test(String(r.state ?? ''))) {
+      conveneGaps.push(`「${t}」${r.state ?? '没有投票'}${miss.length ? ` —— 缺席：${miss.join('、')}` : ''}`);
+    }
+  }
+
+  const sections = [
+    { seat: '监督员', title: '对账', gaps: supervisorGaps },
+    { seat: '审查', title: '证据', gaps: reviewGaps },
+    { seat: '记录', title: '账目', gaps: recordGaps },
+    { seat: '守门', title: '支线', gaps: [], note: branchNote },
+    { seat: '提问', title: '召集', gaps: conveneGaps },
+  ];
+  const gaps = supervisorGaps.concat(reviewGaps, recordGaps, conveneGaps);
+  return { sections, gaps };
+}
+
+/**
  * ==================== 「未决」的消费者（照 B4 可满足性护栏接线） ====================
  *
  * ★ 实测洞（2026-09-24，「支线守门员」复算出来的）：机制**已经**会把它判成「未决」
@@ -6326,6 +6418,25 @@ function main(argv) {
     }
     return r.state.includes('未决') ? 1 : 0;
   }
+  if (cmd === 'convene') {
+    const dir = path.join(root, WARDEN_DIR);
+    if (!fs.existsSync(dir)) { console.log(`[用法] 这个工程还没有 ${WARDEN_DIR}/ —— 先跑：node warden.mjs init`); return 2; }
+    const opt = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
+    const topic = opt('topic') ?? null;
+    const rep = conveneReport(root, { topic });
+    console.log(ROLE_STAMP.check + ' 四席召集（交付点的对账 · 证据 · 召集）');
+    for (const sec of rep.sections) {
+      if (sec.note) console.log(`  · ${sec.seat}（${sec.title}）：${sec.gaps.length ? `${sec.gaps.length} 条缺口` : '✓'}（${sec.note}）`);
+      else console.log(`  · ${sec.seat}（${sec.title}）：${sec.gaps.length ? `${sec.gaps.length} 条缺口` : '✓ 齐'}`);
+      for (const g of sec.gaps) console.log(`      - ${g}`);
+    }
+    if (rep.gaps.length) {
+      console.log(`\n四席召集未通过：${rep.gaps.length} 条缺口 —— 逐席补齐（对账 / 证据 / 召集）后重跑。`);
+      return 1;
+    }
+    console.log('\n四席召集通过：五段账全齐。');
+    return 0;
+  }
   if (cmd === 'rules') {
     const dir = path.join(root, WARDEN_DIR);
     if (!fs.existsSync(dir)) { console.log('[用法] 先跑：node warden.mjs init'); return 2; }
@@ -7990,6 +8101,12 @@ const HELP = `warden.mjs —— 需求监督员 / 交付审查 / 数据账本
   node warden.mjs check [--quiet]    检查（exit 0=过 1=有问题 2=用法错）
        --quiet：只印结论与失败，提醒压成一行计数 —— 一轮里要跑多次时用它省上下文；
        收尾那次（宣布完成/交付前）**不要**加，全量看。
+  node warden.mjs convene [--topic "议题"]  四席召集（exit 0=账齐 1=有缺口 2=没账本）
+       交付点的自动召集（present 闸在交付时自动跑它）—— 五段账每段读盘算出，不信任 AI 的置位：
+       监督员（对账：没推进 / 停在做 / 半交付）· 审查（证据：done 没证据 / 没有审查席复核行）·
+       记录（账目：空壳记录）· 守门（支线：只汇报，"拦"归 branch-guard）·
+       提问（召集：未决议议题 + 缺席名单）。
+       --topic "…" = 只查（或新开）那个议题的缺席 —— 议题开着而席位缺席 ⇒ 缺口。
   node warden.mjs report            生成 .warden/REPORT.md（需求→交付→成本 主表）
   node warden.mjs history <档位id>   查某个档位改过几次、每次花了多少
 

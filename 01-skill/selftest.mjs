@@ -1505,6 +1505,99 @@ cases.push({
   },
 });
 
+// --- 四席召集（convene：对账 / 证据 / 账目 / 召集 分开，交付点读盘自动算账）
+/**
+ * 差距（用户 2026-10-16）：「判」的四席（审查/记录/守门/提问）没有任何程序载体 ——
+ * 只活在 persona 提示词里，主代理不提就不出现；检查（对账）与审查（证据）被混在一起。
+ * conveneReport 把四席各自的账**读盘算出来**（不信任 AI 的置位），present 闸在交付点自动跑它。
+ * ⚠ 夹具全部走 _lab 沙箱，不碰真实 .warden —— 上一版直接备份/还原真实台账，
+ *   finally 扛不住进程被杀：用例 81 就被一次遗留的 VOTES 坑红过（2026-10-16 实测）。
+ */
+const { conveneReport } = await import(pathToFileURL(path.join(HERE, 'warden.mjs')).href);
+const CV_ROUNDS_DONE = JSON.stringify({ round: 1, requirement: 'R1', status: 'done', delivered: '多面体球', evidence: '命令 + 原样输出', why: '按原话做', avoided: ['立方体=用的二十面体骨架，没用立方体', '光球=有面数的多面体，不是光滑球面'] }) + '\n';
+const CV_FINDINGS_OK = JSON.stringify({ by: '审查', text: '复核通过', source: '命令 + 原样输出', ref: 'R1', kind: '事实' }) + '\n';
+
+cases.push({
+  name: '80 convene：四席缺口检出（对账 / 证据 / 账目 分开算）', why: '判的四席没有程序载体 —— 只活在提示词里，主代理不提就不出现（2026-10-16 差距）', expect: 'custom', kind: 'neg',
+  fn: () => {
+    const sb = lab.makeSandbox('convene-gaps');
+    lab.writeUtf8(path.join(sb.wdir, 'SPEC.md'), SPEC_OK + `
+## R2 · 已交付但没人复核的那条
+- 原话: ${C_QUOTE}
+- 出处: session:${sb.sessionId}#2
+- 锁定: 2026-09-16
+`);
+    lab.writeUtf8(path.join(sb.wdir, 'ROUNDS.jsonl'), [
+      JSON.stringify({ round: 1, requirement: 'R1', status: 'in_progress', delivered: '', evidence: '', why: '' }),
+      JSON.stringify({ round: 1, requirement: 'R2', status: 'done', delivered: '交付了', evidence: '命令输出', why: '按需求做' }),
+    ].join('\n') + '\n');
+    const rep = conveneReport(sb.dir, {});
+    const seats = new Map(rep.sections.map((s) => [s.seat, s]));
+    const stucks = (seats.get('监督员')?.gaps ?? []).some((g) => g.startsWith('R1') && g.includes('in_progress'));
+    const blank = (seats.get('记录')?.gaps ?? []).some((g) => g.includes('空壳记录'));
+    const noReview = (seats.get('审查')?.gaps ?? []).some((g) => g.includes('没有审查席的证据行'));
+    return { ok: stucks && blank && noReview, detail: `监督员停在做=${stucks} 空壳账目=${blank} 审查席证据行=${noReview}` };
+  },
+});
+cases.push({
+  name: '81 convene：老实账本（done 有证据 + 审查席复核行 + 无空壳）⇒ 五段全齐', why: '该放行的放行：老实台账不许被拦', expect: 'custom', kind: 'pos',
+  fn: () => {
+    const sb = lab.makeSandbox('convene-clean');
+    lab.writeUtf8(path.join(sb.wdir, 'SPEC.md'), SPEC_OK);
+    lab.writeUtf8(path.join(sb.wdir, 'ROUNDS.jsonl'), CV_ROUNDS_DONE);
+    lab.writeUtf8(path.join(sb.wdir, 'FINDINGS.jsonl'), CV_FINDINGS_OK);
+    const rep = conveneReport(sb.dir, {});
+    return { ok: rep.gaps.length === 0, detail: `gaps=${JSON.stringify(rep.gaps)}` };
+  },
+});
+cases.push({
+  name: '82 convene：议题开着而席位缺席 ⇒ 缺口（投票自动召集）', why: 'vote cast 只是落账工具 —— 缺的是"在交付点自动召集"；缺席名单在 tallyVotes 里已有，convene 把它变成缺口', expect: 'custom', kind: 'neg',
+  fn: () => {
+    const sb = lab.makeSandbox('convene-vote');
+    lab.writeUtf8(path.join(sb.wdir, 'SPEC.md'), SPEC_OK);
+    lab.writeUtf8(path.join(sb.wdir, 'ROUNDS.jsonl'), CV_ROUNDS_DONE);
+    lab.writeUtf8(path.join(sb.wdir, 'FINDINGS.jsonl'), CV_FINDINGS_OK);
+    lab.writeUtf8(path.join(sb.wdir, 'VOTES.jsonl'), [
+      JSON.stringify({ at: new Date().toISOString(), topic: '争议点X', role: '监督员', choice: '甲', reason: '监督员职责内的理由，够十个字' }),
+      JSON.stringify({ at: new Date().toISOString(), topic: '争议点X', role: '记录', choice: '甲', reason: '记录职责内的理由，够十个字' }),
+    ].join('\n') + '\n');
+    const rep = conveneReport(sb.dir, { topic: '争议点X' });
+    const conv = rep.sections.find((s) => s.seat === '提问')?.gaps ?? [];
+    return { ok: conv.length > 0 && conv[0].includes('缺席'), detail: `召集段=${JSON.stringify(conv)}` };
+  },
+});
+cases.push({
+  name: '83 check×convene 口径一致：老实账本两边都过，「审查」署名必须被收下', why: '角色卡教审查员 find add --by 审查，convene 也要求这行复核 —— 但注册表漏 finding:true 时 find add/check 会拒收它，缺口永远关不上（2026-10-16 探针实测才抓到）', expect: 'custom', kind: 'pos',
+  fn: () => {
+    const sb = lab.makeSandbox('convene-consist');
+    lab.seedSession(sb, { users: [QUOTE] });
+    lab.writeUtf8(path.join(sb.wdir, 'SPEC.md'), SPEC_OK);
+    lab.writeUtf8(path.join(sb.wdir, 'ROUNDS.jsonl'), CV_ROUNDS_DONE);
+    lab.writeUtf8(path.join(sb.wdir, 'FINDINGS.jsonl'), CV_FINDINGS_OK);
+    lab.runWarden(sb.dir, ['voices', '--all-windows']);
+    lab.runWarden(sb.dir, ['check']);   // 第一次跑：落水位线，历史未认领只计数
+    const ck = lab.runWarden(sb.dir, ['check']);
+    const rep = conveneReport(sb.dir, {});
+    const noRoleErr = !String(ck.stdout ?? '').includes('不在角色表里');
+    return { ok: ck.code === 0 && rep.gaps.length === 0 && noRoleErr, detail: `check exit=${ck.code} convene gaps=${rep.gaps.length} 审查署名被收=${noRoleErr}` };
+  },
+});
+cases.push({
+  name: '84 check×convene 口径一致：空壳账本两边都拦（同根因不许漂移）', why: '两边判据同源（同一份 SPEC/ROUNDS）—— 一边拦一边放就是口径漂移，用户看到的"过/不过"会自相矛盾', expect: 'custom', kind: 'neg',
+  fn: () => {
+    const sb = lab.makeSandbox('convene-drift');
+    lab.writeUtf8(path.join(sb.wdir, 'SPEC.md'), SPEC_OK);
+    lab.writeUtf8(path.join(sb.wdir, 'ROUNDS.jsonl'), JSON.stringify({ round: 1, requirement: 'R1', status: 'in_progress', delivered: '', evidence: '', why: '' }) + '\n');
+    const ck = lab.runWarden(sb.dir, ['check']);
+    const rep = conveneReport(sb.dir, {});
+    const seats = new Map(rep.sections.map((s) => [s.seat, s]));
+    const ckBlank = String(ck.stdout ?? '').includes('空壳记录');
+    const cvBlank = (seats.get('记录')?.gaps ?? []).some((g) => g.includes('空壳记录'));
+    const cvStuck = (seats.get('监督员')?.gaps ?? []).some((g) => g.includes('in_progress'));
+    return { ok: ck.code === 1 && ckBlank && cvBlank && cvStuck, detail: `check拦=${ck.code === 1} check空壳=${ckBlank} convene空壳=${cvBlank} convene停在做=${cvStuck}` };
+  },
+});
+
 // ---------------------------------------------------------------- 跑
 console.log('='.repeat(78));
 /**

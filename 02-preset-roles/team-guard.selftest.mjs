@@ -719,8 +719,21 @@ fs.writeFileSync(votesPath, [
   JSON.stringify({ topic: 'T2', role: '支线守门员', choice: 'A', at: iso(4) }),
 ].join('\n') + '\n', 'utf8')
 const pending2 = readPendingVotes(wardenDir)
-check('readPendingVotes 4/7 票过半 ⇒ []',
-  pending2.length === 0, JSON.stringify(pending2))
+check('readPendingVotes 4 票过半但 3 席缺席 ⇒ [T2]（缺席=未决，与 tallyVotes 同口径）',
+  pending2.length === 1 && pending2[0] === 'T2', JSON.stringify(pending2))
+
+fs.writeFileSync(votesPath, [
+  JSON.stringify({ topic: 'T2', role: '监督员', choice: 'A', at: iso(1) }),
+  JSON.stringify({ topic: 'T2', role: '审查', choice: 'A', at: iso(2) }),
+  JSON.stringify({ topic: 'T2', role: '记录', choice: 'A', at: iso(3) }),
+  JSON.stringify({ topic: 'T2', role: '支线守门员', choice: 'A', at: iso(4) }),
+  JSON.stringify({ topic: 'T2', role: '提问闸门', choice: 'B', at: iso(5) }),
+  JSON.stringify({ topic: 'T2', role: '资料员', choice: 'B', at: iso(6) }),
+  JSON.stringify({ topic: 'T2', role: '方向员', choice: 'B', at: iso(7) }),
+].join('\n') + '\n', 'utf8')
+const pending2b = readPendingVotes(wardenDir)
+check('readPendingVotes 7 席全勤 4 票过半 ⇒ []（该放的放行）',
+  pending2b.length === 0, JSON.stringify(pending2b))
 
 fs.writeFileSync(votesPath, [
   JSON.stringify({ topic: 'T1', role: '监督员', choice: 'A', at: iso(1) }),
@@ -729,9 +742,12 @@ fs.writeFileSync(votesPath, [
   JSON.stringify({ topic: 'T2', role: '审查', choice: 'B', at: iso(2) }),
   JSON.stringify({ topic: 'T2', role: '记录', choice: 'B', at: iso(3) }),
   JSON.stringify({ topic: 'T2', role: '支线守门员', choice: 'B', at: iso(4) }),
+  JSON.stringify({ topic: 'T2', role: '提问闸门', choice: 'A', at: iso(5) }),
+  JSON.stringify({ topic: 'T2', role: '资料员', choice: 'A', at: iso(6) }),
+  JSON.stringify({ topic: 'T2', role: '方向员', choice: 'A', at: iso(7) }),
 ].join('\n') + '\n', 'utf8')
 const pending3 = readPendingVotes(wardenDir)
-check('readPendingVotes 混合 T1未过半+T2过半 ⇒ [T1]',
+check('readPendingVotes 混合 T1未过半+T2全勤过半 ⇒ [T1]',
   pending3.length === 1 && pending3[0] === 'T1', JSON.stringify(pending3))
 
 const triReason = triageGateReason(W, ['议题X'])
@@ -767,17 +783,28 @@ check('triageGateReason 明说重试不会放行', triReason.includes('重试不
     `got ${JSON.stringify(presentTri)}`)
 
   fs.writeFileSync(votesPath, [
-    JSON.stringify({ topic: '未决议议题', role: '监督员', choice: 'A', at: iso(1) }),
-    JSON.stringify({ topic: '未决议议题', role: '审查', choice: 'A', at: iso(2) }),
-    JSON.stringify({ topic: '未决议议题', role: '记录', choice: 'A', at: iso(3) }),
-    JSON.stringify({ topic: '未决议议题', role: '支线守门员', choice: 'A', at: iso(4) }),
+    JSON.stringify({ topic: '未决议议题', role: '监督员', choice: 'A', reason: '监督员职责内的一条理由', at: iso(1) }),
+    JSON.stringify({ topic: '未决议议题', role: '审查', choice: 'A', reason: '审查职责内的一条理由', at: iso(2) }),
+    JSON.stringify({ topic: '未决议议题', role: '记录', choice: 'A', reason: '记录职责内的一条理由', at: iso(3) }),
+    JSON.stringify({ topic: '未决议议题', role: '支线守门员', choice: 'A', reason: '守门员职责内的一条理由', at: iso(4) }),
+    JSON.stringify({ topic: '未决议议题', role: '提问闸门', choice: 'A', reason: '闸门员职责内的一条理由', at: iso(5) }),
+    JSON.stringify({ topic: '未决议议题', role: '资料员', choice: 'A', reason: '资料员职责内的一条理由', at: iso(6) }),
+    JSON.stringify({ topic: '未决议议题', role: '方向员', choice: 'A', reason: '方向员职责内的一条理由', at: iso(7) }),
   ].join('\n') + '\n', 'utf8')
+  // ★ 全链路正控：conveneGate 会真跑 convene —— 四席的账也得齐（SPEC/ROUNDS/FINDINGS），
+  //   只补票不补账会被它拦下（2026-10-16 实测：此前这条用例的绿是旧副本无 convene 命令的 fail-open 假绿）
+  fs.writeFileSync(path.join(wardenDir, '.warden', 'SPEC.md'),
+    '# 需求锁定表\n\n## R1 · 分诊闸测试需求\n- 原话: 夹具原话\n- 出处: session:triage#1\n- 锁定: 2026-09-26\n', 'utf8')
+  fs.writeFileSync(path.join(wardenDir, '.warden', 'ROUNDS.jsonl'),
+    JSON.stringify({ round: 1, requirement: 'R1', status: 'done', delivered: '交付了', evidence: '命令输出', why: '按需求做' }) + '\n', 'utf8')
+  fs.writeFileSync(path.join(wardenDir, '.warden', 'FINDINGS.jsonl'),
+    JSON.stringify({ by: '审查', text: '复核通过', source: '命令输出', ref: 'R1', kind: '事实' }) + '\n', 'utf8')
   const presentTri2 = await preTool3({
     name: 'present',
     arguments: { files: [{ path: path.join(wardenDir, 'x.md') }] },
     agent: mainAgent3,
   }, allow3)
-  check('★ 分诊闸：投票过半后 present ⇒ allow',
+  check('★ 分诊闸：投票全勤过半 + 四席账齐 ⇒ present allow',
     presentTri2?.kind !== 'deny', `got ${JSON.stringify(presentTri2)}`)
 }
 

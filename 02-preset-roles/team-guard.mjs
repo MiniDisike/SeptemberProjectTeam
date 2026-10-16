@@ -1061,10 +1061,10 @@ export function protocolText(warden = wardenPath(), configIssue = null) {
     `    ${W} vote cast --topic "议题" --role <角色> --choice "选项" --reason "为什么"`,
     '  ④ 看计票结论：',
     `    ${W} vote --topic "议题"`,
-    '    · 过半（4/7 席）选同一选项 ⇒ 按结论走（**不问用户**）；',
-    '    · 未过半 / 分歧 ⇒ 继续补票、或换一个更具体的议题重投；',
+    '    · 席位到齐且过半（≥4/7 席）选同一选项 ⇒ 按结论走（**不问用户**）；',
+    '    · 缺席 / 未过半 / 分歧 ⇒ 继续补票、或换一个更具体的议题重投；',
     '  ⑤ 投票决定不了（补完票仍不过半）⇒ 才推给用户，并附各方意见与票数。',
-    '  ⚠ **交付（present）前有未决议的投票会被硬拦** —— 必须先投出过半结论或明确推给用户。',
+    '  ⚠ **交付（present）前有未决议的投票会被硬拦** —— 必须先投出结论（到齐 + 过半）或明确推给用户。',
     // ⚠ 配置读不出来时**在这一段里也说出来**（不只在状态行）—— 用户照文档写了配置却静默无效，
     //   正是"不稳定"的一种；这里说清"文件在、但读不出来、现在用的是默认值"。
     ...(configIssue !== null && configIssue !== undefined
@@ -1251,13 +1251,13 @@ export function triageGateReason(warden = wardenPath(), topics = []) {
     '',
     list,
     '',
-    '交付前必须把这些议题投出过半结论（4/7 席选同一选项 = 已决议）：',
+    '交付前必须把这些议题投出结论（7 席到齐 + ≥4 票同一选项 = 已决议；**缺席也算未决**）：',
     `  ${W} vote --topic "…"        看计票状态`,
     `  ${W} vote cast --topic "…" --role <角色> --choice "…" --reason "…"   补票`,
     '',
-    '· 过半 ⇒ 按结论走（不问用户）；',
+    '· 到齐且过半 ⇒ 按结论走（不问用户）；',
     '· 补完票仍不过半 / 分歧 ⇒ 才推给用户，并附各方意见与票数。',
-    '⚠ **重试不会放行**：必须真把未决议的 topic 投出过半结论，然后才能交付。',
+    '⚠ **重试不会放行**：必须真把未决议的 topic 投出结论（到齐 + 过半），然后才能交付。',
   ].join('\n')
 }
 
@@ -1991,9 +1991,11 @@ export function readWardenState(cwd) {
 /**
  * 分诊闸：读 `.warden/VOTES.jsonl`，返回**未决议**的议题列表。
  *
- * "未决议" = 没有一个选项拿到过半（4/7 席）票。
- * 这是 `warden.mjs` 的 `tallyVotes` 的**简化版**（不处理异议 / 附D条件 / 账目矛盾）——
- * 作为 present 闸的"有没有没投完的票"检查够用，精确计票仍由 `warden.mjs vote --topic` 做。
+ * "未决议" = 应到席位**没到齐**，或没有一个选项拿到过半（4/7 席）票。
+ * ★ 2026-10-16 与 tallyVotes 统一口径（缺席 = 未决）：此前简化版只数实到票，
+ *   4 席投 A、3 席缺席就判"已决" —— 与 warden 的「缺席·未决」互相矛盾：
+ *   present 闸一边提示"投出过半就行"，一边被 convene 拦成"席位没到齐"，死循环。
+ *   tallyVotes 的完整判据（异议 / 附条件 / 账目矛盾）仍由 `warden.mjs vote --topic` 做。
  *
  * ⚠ `TRIAGE_VOTE_ROLES` 与 `warden.mjs` 的 `VOTE_ROLES` **必须一致**（7 席有票）。
  *   角色名单只有一张（`ROLE_REGISTRY`）；这里不 import warden.mjs（它是脚本不是模块），
@@ -2033,7 +2035,9 @@ export function readPendingVotes(cwd) {
     const counts = {}
     for (const { choice } of m.values()) counts[choice] = (counts[choice] || 0) + 1
     const max = Math.max(0, ...Object.values(counts))
-    if (max < TRIAGE_MAJORITY) pending.push(topic)
+    // ★ 缺席 = 未决（与 tallyVotes 同口径）：不把缺席当同意
+    const missing = TRIAGE_VOTE_ROLES.filter((r) => !m.has(r))
+    if (missing.length || max < TRIAGE_MAJORITY) pending.push(topic)
   }
   return pending
 }
